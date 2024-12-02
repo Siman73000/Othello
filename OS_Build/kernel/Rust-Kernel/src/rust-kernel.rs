@@ -23,7 +23,6 @@ enum VgaColor {
     White = 15,
 }
 
-
 #[inline(always)]
 fn vga_entry_color(fg: VgaColor, bg: VgaColor) -> u8 {
     (fg as u8) | ((bg as u8) << 4)
@@ -54,10 +53,8 @@ extern "C" {
 const VGA_WIDTH: usize = 80;
 const VGA_HEIGHT: usize = 25;
 
-use core::panic::PanicInfo;
-
 #[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
+fn panic(_info: &core::panic::PanicInfo) -> ! {
     loop {}
 }
 

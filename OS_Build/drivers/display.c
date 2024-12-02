@@ -1,6 +1,6 @@
 #include "display.h"
 #include "ports.h"
-#include "Kernel/util.h"
+#include "kernel/util.h"
 #include <stdint.h>
 
 void set_cursor(int32_t offset) {

@@ -4,9 +4,16 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+no-std = "0.0.1"
+panic-halt = "1.0.0"
 
-[build]
-target = "x86_64-unknown-none"
+[[bin]]
+name = "rust-kernel"
+path = "src/rust-kernel.rs"
+
+[[bin]]
+name = "utility"
+path = "src/utility.rs"
 
 [profile.dev]
 panic = "abort"

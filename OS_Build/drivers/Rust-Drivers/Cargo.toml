@@ -1,0 +1,19 @@
+[package]
+name = "rust-display"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "rust-display"
+path = "src/rust-display.rs"
+
+[dependencies]
+
+[build]
+target = "x86_64-unknown-none"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
