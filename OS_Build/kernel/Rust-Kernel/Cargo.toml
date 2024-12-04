@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 no-std = "0.0.1"
 panic-halt = "1.0.0"
+x86_64 = "0.15.2"
 
 [[bin]]
 name = "rust-kernel"
