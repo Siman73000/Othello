@@ -90,3 +90,16 @@ static BOOT_SECTOR_PADDING: [u8; 510] = [0; 510 - 2]; // Subtract space for boot
 #[link_section = ".boot"]
 #[used]
 static BOOT_SIGNATURE: [u8; 2] = [0x55, 0xAA];
+
+
+/* 
+
+mod helpers {
+    pub mod utils; // Declare the utils module inside the helpers folder
+}
+
+fn main() {
+    helpers::utils::print_message(); // Call the function
+}
+
+*/
