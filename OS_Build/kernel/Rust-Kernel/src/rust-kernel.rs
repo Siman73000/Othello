@@ -3,6 +3,11 @@
 
 use core::ffi::c_char;
 
+fn clear_screen();
+fn print_string(str: char*);
+fn print_nl();
+fn int_to_string(v: u32, buff: char*, radix_base: u32);
+
 #[repr(u8)]
 enum VgaColor {
     Black = 0,
