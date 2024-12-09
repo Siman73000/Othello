@@ -3,12 +3,11 @@
 
 use core::panic::PanicInfo;
 
-extern "C" {
-    fn port_byte_out(port: u32, data: u8);
-    fn port_byte_in(port: u32) -> u8;
-    fn port_word_in(port: u32) -> u16;
-    fn port_word_out(port: u32, data: u16);
-}
+
+fn port_byte_out(port: u32, data: u8);
+fn port_byte_in(port: u32) -> u8;
+fn port_word_in(port: u32) -> u16;
+fn port_word_out(port: u32, data: u16);
 
 const VIDEO_ADDRESS: u32 = 0xb8000;
 const MAX_ROWS: u32 = 25;
