@@ -5,14 +5,20 @@
 
 use core::panic::PanicInfo;
 
+
+fn port_byte_out(port: u32, data: u8);
+fn port_byte_in(port: u32) -> u8;
+fn port_word_in(port: u32) -> u16;
+fn port_word_out(port: u32, data: u16);
+
+
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
     loop {}
 }
 
 #[no_mangle]
-pub extern "C" fn _start() -> ! {
-    // Initialize hardware, call kernel code, etc.
+pub fn _start() -> ! {
     loop {}
 }
 
