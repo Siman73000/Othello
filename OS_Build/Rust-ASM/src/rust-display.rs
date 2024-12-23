@@ -2,12 +2,33 @@
 #![no_main]
 
 use core::panic::PanicInfo;
+use core::arch::naked_asm!;
 
 
-fn port_byte_out(port: u32, data: u8);
-fn port_byte_in(port: u32) -> u8;
-fn port_word_in(port: u32) -> u16;
-fn port_word_out(port: u32, data: u16);
+fn port_byte_out(port: u32, data: u8) {
+    unsafe {
+        naked_asm!("out dx, al", in("dx") port, in("al") data);
+    }
+}
+fn port_byte_in(port: u32) -> u8 {
+    let data: u8;
+    unsafe {
+        naked_asm!("in al, dx", out("al") data, in("dx") port);
+    }
+    data
+}
+fn port_word_in(port: u32) -> u16 {
+    let data: u16;
+    unsafe {
+        naked_asm!("in ax, dx", out("ax") data, in("dx") port);
+    }
+    data
+}
+fn port_word_out(port: u32, data: u16) {
+    unsafe {
+        naked_asm!("out dx, ax", in("dx") port, in("ax") data);
+    }
+}
 
 const VIDEO_ADDRESS: u32 = 0xb8000;
 const MAX_ROWS: u32 = 25;

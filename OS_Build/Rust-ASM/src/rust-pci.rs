@@ -43,7 +43,7 @@ unsafe fn check_device(bus: u8, device: u8) {
 /// Placeholder for I/O port functions.
 unsafe fn outl(port: u16, value: u32) {
     // Write the value to the specified port.
-    core::arch::asm!(
+    core::arch::naked_asm!(
         "out dx, eax",
         in("dx") port,
         in("eax") value
@@ -52,7 +52,7 @@ unsafe fn outl(port: u16, value: u32) {
 
 unsafe fn inl(port: u16) -> u32 {
     let value: u32;
-    core::arch::asm!(
+    core::arch::naked_asm!(
         "in eax, dx",
         out("eax") value,
         in("dx") port
@@ -62,6 +62,9 @@ unsafe fn inl(port: u16) -> u32 {
 
 /// Placeholder for function-level checks.
 unsafe fn check_function(bus: u8, device: u8, function: u8) {
-    // Extend this as needed for additional device checks.
-    // Example: Check the device and class ID here.
+    // Check the device function.
+    let vendor = pci_config_read_word(bus, device, function, 0);
+    if vendor != 0xFFFF {
+        // Process the device function.
+    }
 }
