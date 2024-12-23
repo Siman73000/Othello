@@ -3,10 +3,10 @@
 
 use core::ffi::c_char;
 
-fn clear_screen();
-fn print_string(str: char*);
-fn print_nl();
-fn int_to_string(v: u32, buff: char*, radix_base: u32);
+fn clear_screen(){}
+fn print_string(str: char){}
+fn print_nl(){}
+fn int_to_string(v: u32, buff: char, radix_base: u32){}
 
 #[repr(u8)]
 enum VgaColor {
@@ -48,12 +48,14 @@ fn strlen(s: *const c_char) -> usize {
     }
 }
 
+/*
 extern "C" {
     fn clear_screen();
     fn print_string(s: *const c_char);
     fn print_nl();
     fn int_to_string(value: i32, buffer: *mut c_char, radix: i32) -> *mut c_char;
 }
+*/
 
 const VGA_WIDTH: usize = 80;
 const VGA_HEIGHT: usize = 25;
@@ -64,7 +66,7 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
 }
 
 #[no_mangle]
-pub extern "C" fn kernel_main() -> ! {
+pub fn kernel_main() -> ! {
     unsafe {
         clear_screen();
     }

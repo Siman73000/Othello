@@ -1,105 +1,68 @@
 #![no_std]
 #![no_main]
-#![feature(asm_const, naked_functions)]
+#![feature(naked_functions)]
 
-use core::arch::asm;
+// Panic handler
+use core::panic::PanicInfo;
+use core::arch::naked_asm;
 
-// Constants
-const KERNEL_OFFSET: u16 = 0x1000;
+#[panic_handler]
+fn panic(_info: &PanicInfo) -> ! {
+    loop {
+        unsafe { core::arch::asm!("hlt"); }
+    }
+}
 
-// Messages
-const MSG_16BIT_MODE: &[u8] = b"Started in 16-bit Real Mode\n\0";
-const MSG_32BIT_MODE: &[u8] = b"Landed in 32-bit Protected Mode\n\0";
-const MSG_LOAD_KERNEL: &[u8] = b"Loading kernel into memory\n\0";
-
-// Boot drive storage
-static mut BOOT_DRIVE: u8 = 0;
-
+// Entry point
 #[naked]
 #[no_mangle]
 pub extern "C" fn start() -> ! {
     unsafe {
-        asm!(
-            // Save boot drive number
-            "mov [{boot_drive}], dl",
-            // Set up stack
-            "mov bp, 0x9000",
+        naked_asm!(
+            "cli",                      // Clear interrupts
+            "mov [{boot_drive}], dl",   // Store boot drive in a static variable
+            "mov bp, 0x9000",           // Setup stack pointer
             "mov sp, bp",
-            // Print message
-            "mov bx, {msg_16bit}",
-            "call print16",
-            "call print16_nl",
-            // Load kernel
-            "call load_kernel",
-            // Switch to 32-bit mode
-            "call switchto32bit",
-            // Infinite loop
-            "jmp $",
-            boot_drive = sym BOOT_DRIVE,
-            msg_16bit = sym MSG_16BIT_MODE.as_ptr(),
-            options(noreturn)
-        );
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn load_kernel() {
-    unsafe {
-        asm!(
-            // Print message
-            "mov bx, {msg_load_kernel}",
-            "call print16",
-            "call print16_nl",
-            // Load kernel
-            "mov bx, {kernel_offset}",
-            "mov edx, 32",
-            "mov dl, [{boot_drive}]",
-            "call disk_load",
-            msg_load_kernel = sym MSG_LOAD_KERNEL.as_ptr(),
-            kernel_offset = const KERNEL_OFFSET,
+            "jmp real_mode_entry",      // Jump to real-mode entry
             boot_drive = sym BOOT_DRIVE,
             options(noreturn)
         );
     }
 }
 
-#[naked]
-#[no_mangle]
-pub extern "C" fn begin_32bit() -> ! {
-    unsafe {
-        asm!(
-            // Print message
-            "mov ebx, {msg_32bit}",
-            "call print32",
-            // Jump to kernel
-            "call {kernel_offset}",
-            "jmp $",
-            msg_32bit = sym MSG_32BIT_MODE.as_ptr(),
-            kernel_offset = const KERNEL_OFFSET,
-            options(noreturn)
-        );
-    }
-}
+// Boot drive storage
+#[link_section = ".data"]
+static mut BOOT_DRIVE: u8 = 0;
 
-// BIOS Parameter Block (BPB) padding to 510 bytes
+use core::arch::global_asm;
+
+global_asm!(
+    r#"
+    .section .text
+    .global real_mode_entry
+real_mode_entry:
+    call load_kernel
+    call switch_to_protected_mode
+    jmp $
+    "#);
+
+global_asm!(
+    r#"
+    .section .text
+    .global switch_to_protected_mode
+switch_to_protected_mode:
+    lgdt [gdt_descriptor]
+    mov eax, cr0
+    or eax, 0x1
+    mov cr0, eax
+    jmp 0x08:protected_mode_entry
+    "#);
+
+// Boot sector padding and signature
 #[link_section = ".boot"]
 #[used]
-static BOOT_SECTOR_PADDING: [u8; 510] = [0; 510 - 2]; // Subtract space for boot signature
+static BOOT_SECTOR_PADDING: [u8; 510 - 2] = [0; 510 - 2];
 
-// Boot sector signature
 #[link_section = ".boot"]
 #[used]
 static BOOT_SIGNATURE: [u8; 2] = [0x55, 0xAA];
-
-
-/* 
-
-mod helpers {
-    pub mod utils; // Declare the utils module inside the helpers folder
-}
-
-fn main() {
-    helpers::utils::print_message(); // Call the function
-}
-
-*/
