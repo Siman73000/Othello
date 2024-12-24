@@ -14,9 +14,9 @@ fn panic(_info: &PanicInfo) -> ! {
 }
 
 // Entry point
-#[naked]
 #[no_mangle]
-pub extern "C" fn start() -> ! {
+#[naked]
+pub extern "C" fn start() {
     unsafe {
         naked_asm!(
             "cli",                      // Clear interrupts
@@ -25,10 +25,11 @@ pub extern "C" fn start() -> ! {
             "mov sp, bp",
             "jmp real_mode_entry",      // Jump to real-mode entry
             boot_drive = sym BOOT_DRIVE,
-            options(noreturn)
         );
     }
 }
+
+
 
 // Boot drive storage
 #[link_section = ".data"]

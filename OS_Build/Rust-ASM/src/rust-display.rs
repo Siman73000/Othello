@@ -2,14 +2,18 @@
 #![no_main]
 
 use core::panic::PanicInfo;
-use core::arch::naked_asm!;
+use core::arch::naked_asm;
 
-
+#[no_mangle]
+#[naked]
 fn port_byte_out(port: u32, data: u8) {
     unsafe {
         naked_asm!("out dx, al", in("dx") port, in("al") data);
     }
 }
+
+#[no_mangle]
+#[naked]
 fn port_byte_in(port: u32) -> u8 {
     let data: u8;
     unsafe {
@@ -17,6 +21,9 @@ fn port_byte_in(port: u32) -> u8 {
     }
     data
 }
+
+#[no_mangle]
+#[naked]
 fn port_word_in(port: u32) -> u16 {
     let data: u16;
     unsafe {
@@ -24,6 +31,9 @@ fn port_word_in(port: u32) -> u16 {
     }
     data
 }
+
+#[no_mangle]
+#[naked]
 fn port_word_out(port: u32, data: u16) {
     unsafe {
         naked_asm!("out dx, ax", in("dx") port, in("ax") data);
