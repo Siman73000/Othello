@@ -104,7 +104,7 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
 }
 
 #[no_mangle]
-pub extern "C" fn kernel_main() -> ! {
+fn kernel_main() -> ! {
     clear_screen();
 
     let mut buffer: [u8; 100] = [0; 100];

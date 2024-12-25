@@ -18,6 +18,7 @@ static MSG_PANIC: &[u8] = b"Kernel panic!\n\0";
 pub extern "C" fn disk_load(_sectors: u8, _drive: u8) {
     unsafe {
         naked_asm!(
+            .code16,
             "pusha",
             "push dx",
             "mov ah, 0x02",
@@ -71,7 +72,7 @@ extern "C" fn sectors_error() -> ! {
 use core::arch::asm;
 
 #[panic_handler]
-fn panic(info: &PanicInfo) -> ! {
+fn panic(_info: &PanicInfo) -> ! {
     unsafe {
         asm!(
             "mov ebx, {msg_panic}",

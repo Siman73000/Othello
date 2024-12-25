@@ -49,9 +49,16 @@ BEGIN_32BIT:
 
 ; Self explanitory stuff below
 
+BEGIN_64BIT:
+    mov ebx, MSG_64BIT_MODE
+    call print32
+    jmp $
+; Variables for 64bit mode print out
+
 BOOT_DRIVE db 0
 MSG_16BIT_MODE db "Started in 16-bit Real Mode", 0
 MSG_32BIT_MODE db "Landed in 32-bit Protected Mode", 0
+MSG_64BIT_MODE db "Entered 64-bit Long Mode", 0
 MSG_LOAD_KERNEL db "Loading kernel into memory", 0
 
 
