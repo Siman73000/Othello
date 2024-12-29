@@ -31,6 +31,24 @@ disk_load:
     mov ax, 0x4C00
     int 0x21
 
+load_kernel_mbr:
+    mov bx, MSG_LOAD_KERNEL_MBR
+    call print16
+    mov bx, KERNEL_OFFSET
+    mov dh, 32
+    mov cl, 0x02
+    call disk_load
+    ret
+
+load_kernel_gpt:
+    mov bx, MSG_LOAD_KERNEL_GPT
+    call print16
+    mov bx, KERNEL_OFFSET
+    mov dh, 64
+    mov cl, 0x03
+    call disk_load
+    ret
+
 disk_error:
     mov ebx, MSG_DISK_ERROR
     call print16
@@ -42,4 +60,6 @@ sectors_error:
     jmp $
 
 MSG_DISK_ERROR db "Disk read error!", 0
+MSG_LOAD_KERNEL_MBR db "Loading MBR kernel into memory...", 0
+MSG_LOAD_KERNEL_GPT db "Loading GPT kernel into memory...", 0
 MSG_SECTORS_ERROR db "Sector mismatch error!", 0

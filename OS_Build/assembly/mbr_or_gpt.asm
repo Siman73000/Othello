@@ -5,6 +5,11 @@ extern switchto64bit
 extern print32
 extern print64
 extern disk_load
+extern check_partition_table
+extern disk_error
+extern sectors_error
+extern load_kernel_mbr
+extern load_kernel_gpt
 global BEGIN_32BIT
 global BEGIN_64BIT
 global start
@@ -25,9 +30,21 @@ start:
     call print16
     call print16_nl
 
-    call load_kernel            ; Load kernel from disk
-    call switchto32bit          ; Switch to 32-bit Protected Mode
-    jmp $
+    call check_partition_table  ; Detect PT scheme
+
+    cmp byte [PARTITION_TYHPE], 0x01
+    je load_mbr_kernel
+    cmp byte [PARTITION_TYPE], 0x02
+    je load_gpt_kernel
+    jmp partition_error
+
+load_mbr_kernel:
+    call load_kernel_mbr
+    jmp continue_boot
+
+load_gpt_kernel:
+    call load_kernel_gpt
+    jmp continue_boot
 
 load_kernel:
     mov bx, MSG_LOAD_KERNEL
@@ -39,6 +56,16 @@ load_kernel:
     mov dl, [BOOT_DRIVE]
     call disk_load
     ret
+
+continue_boot:
+    call switchto32bit
+    call switchto64bit
+    jmp $
+
+partition_error:
+    mov bx, MSG_PARTITION_ERROR
+    call print16
+    jmp $
 
 [bits 32]   ; 32-bit Protected Mode
 
