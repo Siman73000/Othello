@@ -1,3 +1,4 @@
+;____________________________________________________________________________________
 ;
 ;   Detects if the Hardware is using MBR/GPT PT and or BIOS/UEFI
 ;
@@ -6,6 +7,7 @@
 ;   If a valid GPT table is found it loads the GPT.
 ;   If no valid table is found it defaults to MBR.
 ;
+;____________________________________________________________________________________
 
 section .data
 MBR_SIGNATURE dw 0xaa55
