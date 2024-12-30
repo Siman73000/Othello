@@ -6,31 +6,7 @@ edition = "2021"
 [dependencies]
 no-std = "0.0.1"
 panic-halt = "1.0.0"
-x86_64 = "0.14.0"
-
-[[bin]]
-name = "mbr"
-path = "src/mbr.rs"
-
-[[bin]]
-name = "disk"
-path = "src/disk.rs"
-
-[[bin]]
-name = "gdt"
-path = "src/gdt.rs"
-
-[[bin]]
-name = "kernelentry"
-path = "src/kernelentry.rs"
-
-[[bin]]
-name = "print16bit"
-path = "src/print16bit.rs"
-
-[[bin]]
-name = "print32"
-path = "src/print32.rs"
+x86_64 = "0.15.0"
 
 [[bin]]
 name = "rust-display"
@@ -47,10 +23,6 @@ path = "src/rust-pci.rs"
 [[bin]]
 name = "rust-ports"
 path = "src/rust-ports.rs"
-
-[[bin]]
-name = "switchto32bit"
-path = "src/switchto32bit.rs"
 
 [[bin]]
 name = "utility"

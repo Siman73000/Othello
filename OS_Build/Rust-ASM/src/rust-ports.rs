@@ -1,16 +1,8 @@
-//#![feature(asm)]
 #![no_std]
 #![no_main]
 
-
 use core::panic::PanicInfo;
-
-/*
-fn port_byte_out(port: u32, data: u8);
-fn port_byte_in(port: u32) -> u8;
-fn port_word_in(port: u32) -> u16;
-fn port_word_out(port: u32, data: u16);
-*/
+use x86_64::instructions::port::{PortRead, PortWrite};
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
@@ -19,52 +11,28 @@ fn panic(_info: &PanicInfo) -> ! {
 
 #[no_mangle]
 pub fn _start() -> ! {
+    // Example: Write 0xAB to port 0x60 and read from it
+    port_byte_out(0x60, 0xAB);
+    let value = port_byte_in(0x60);
     loop {}
 }
 
-
-use core::arch::asm;
-
 pub fn port_byte_in(port: u16) -> u8 {
-    let mut result: u8;
-    unsafe {
-        asm!(
-            "in al, dx",
-            in("dx") port,
-            lateout("al") result,
-        );
-    }
-    result
+    let mut port = PortRead::new(port);
+    port.read()
 }
 
 pub fn port_byte_out(port: u16, data: u8) {
-    unsafe {
-        asm!(
-            "out dx, al",
-            in("al") data,
-            in("dx") port,
-        );
-    }
+    let mut port = PortWrite::new(port);
+    port.write(data);
 }
 
 pub fn port_word_in(port: u16) -> u16 {
-    let mut result: u16;
-    unsafe {
-        asm!(
-            "in ax, dx",
-            in("dx") port,
-            lateout("ax") result,
-        );
-    }
-    result
+    let mut port = PortRead::new(port);
+    port.read()
 }
 
 pub fn port_word_out(port: u16, data: u16) {
-    unsafe {
-        asm!(
-            "out dx, ax",
-            in("ax") data,
-            in("dx") port,
-        );
-    }
+    let mut port = PortWrite::new(port);
+    port.write(data);
 }

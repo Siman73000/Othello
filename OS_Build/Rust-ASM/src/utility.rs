@@ -3,21 +3,28 @@
 
 use core::ffi::c_char;
 
+// copies memory from source to dest
 fn memory_copy(source: *const u8, dest: *mut u8, nbytes: usize) {
     unsafe {
         for i in 0..nbytes {
+            // raw pointer math
             *dest.add(i) = *source.add(i);
         }
     }
 }
 
-fn int_to_string(v: i32, buff: *mut c_char, radix_base: u32) -> *mut c_char {
+// converts an int to a null-terminated string in a specified radix/base
+fn int_to_string(int_to_convert: i32, buff: *mut c_char, radix_base: u32) -> *mut c_char {
+
+    // lookup table
     const TABLE: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyz";
 
+    // unsafe due to raw pointer math and dereferencing
     unsafe {
         let mut p = buff;
-        let mut n = if v < 0 && radix_base == 10 { -(v as i32) as u32 } else { v as u32 };
+        let mut n = if int_to_convert < 0 && radix_base == 10 { -(int_to_convert as i32) as u32 } else { int_to_convert as u32 };
 
+        // converts the int to str
         while n >= radix_base {
             *p = TABLE[(n % radix_base) as usize] as c_char;
             p = p.add(1);
@@ -26,13 +33,16 @@ fn int_to_string(v: i32, buff: *mut c_char, radix_base: u32) -> *mut c_char {
         *p = TABLE[n as usize] as c_char;
         p = p.add(1);
 
-        if v < 0 && radix_base == 10 {
+        // adds a negative sign if the number is negative and the base is 10
+        if int_to_convert < 0 && radix_base == 10 {
             *p = b'-' as c_char;
             p = p.add(1);
         }
 
+        // null-terminates the string
         *p = 0;
 
+        // reverses the string
         let mut start = buff;
         let mut end = p.offset(-1);
         while start < end {
@@ -47,6 +57,7 @@ fn int_to_string(v: i32, buff: *mut c_char, radix_base: u32) -> *mut c_char {
     }
 }
 
+// prevents program from crashing when std panic is unavailable
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
     loop {}

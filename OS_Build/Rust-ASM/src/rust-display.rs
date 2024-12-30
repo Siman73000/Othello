@@ -2,68 +2,91 @@
 #![no_main]
 
 use core::panic::PanicInfo;
-use core::arch::naked_asm;
-
-#[no_mangle]
-#[naked]
-fn port_byte_out(port: u32, data: u8) {
-    unsafe {
-        naked_asm!("out dx, al", in("dx") port, in("al") data);
-    }
-}
-
-#[no_mangle]
-#[naked]
-fn port_byte_in(port: u32) -> u8 {
-    let data: u8;
-    unsafe {
-        naked_asm!("in al, dx", out("al") data, in("dx") port);
-    }
-    data
-}
-
-#[no_mangle]
-#[naked]
-fn port_word_in(port: u32) -> u16 {
-    let data: u16;
-    unsafe {
-        naked_asm!("in ax, dx", out("ax") data, in("dx") port);
-    }
-    data
-}
-
-#[no_mangle]
-#[naked]
-fn port_word_out(port: u32, data: u16) {
-    unsafe {
-        naked_asm!("out dx, ax", in("dx") port, in("ax") data);
-    }
-}
+use x86_64::instructions::port::{Port, PortWriteOnly};
 
 const VIDEO_ADDRESS: u32 = 0xb8000;
 const MAX_ROWS: u32 = 25;
 const MAX_COLS: u32 = 80;
 const WHITE_ON_BLACK: u8 = 0x0f;
-const REG_SCREEN_CTRL: u32 = 0x3d4;
-const REG_SCREEN_DATA: u32 = 0x3d5;
+const REG_SCREEN_CTRL: u16 = 0x3d4;
+const REG_SCREEN_DATA: u16 = 0x3d5;
 
+enum DisplayType {
+    VGA,
+    Framebuffer,
+    HDMI,
+    DisplayPort,
+    Unknown,
+}
+
+pub fn _start() -> ! {
+    let display_type = detect_display();
+
+    match display_type {
+        DisplayType::VGA => vga_driver::init(),
+        DisplayType::Framebuffer => framebuffer_driver::init(),
+        DisplayType::HDMI | DisplayType::DisplayPort => {
+            // advanced drivers will go here
+            unimplemented!("Nothing to see here yet.");
+        }
+        DisplayType::Unknown => panic!("Unknown display type."),
+    }
+    loop {}
+}
+
+fn detect_display() -> DisplayType {
+    // query UEFI GOP or BIOS for framebuffer
+    if let Some(framebuffer_info) = query_framebuffer() {
+        return DisplayType::Framebuffer;
+    }
+    if query_pci_for_hdmi() {
+        return DisplayType::HDMI;
+    }
+    if query_pci_for_dp() {
+        return DisplayType::DisplayPort;
+    }
+    DisplayType::VGA
+}
+
+fn query_framebuffer() -> Option<FrameBufferInfo> {
+    None
+}
+
+fn query_pci_for_hdmi() -> bool {
+    false
+}
+
+fn query_pci_for_dp() -> bool {
+    false
+}
+
+// updates hardware cursor pos
+// the pos is split into high & low bytes then sent to VGA ports 0x3d4 & 0x3d5
 fn set_cursor(offset: u32) {
     let offset = offset / 2;
+    let mut screen_ctrl = PortWriteOnly::new(REG_SCREEN_CTRL);
+    let mut screen_data = PortWriteOnly::new(REG_SCREEN_DATA);
+
     unsafe {
-        port_byte_out(REG_SCREEN_CTRL, 14);
-        port_byte_out(REG_SCREEN_DATA, (offset >> 8) as u8);
-        port_byte_out(REG_SCREEN_CTRL, 15);
-        port_byte_out(REG_SCREEN_DATA, (offset & 0xff) as u8);
+        screen_ctrl.write(14);
+        screen_data.write((offset >> 8) as u8);
+        screen_ctrl.write(15);
+        screen_data.write((offset & 0xff) as u8);
     }
 }
 
+// gets the current cursor pos from VGA controller
+// returns offset in vid mem
 fn get_cursor() -> u32 {
+    let mut screen_ctrl = Port::new(REG_SCREEN_CTRL);
+    let mut screen_data = Port::new(REG_SCREEN_DATA);
+
     let mut offset: u32;
     unsafe {
-        port_byte_out(REG_SCREEN_CTRL, 14);
-        offset = (port_byte_in(REG_SCREEN_DATA) as u32) << 8;
-        port_byte_out(REG_SCREEN_CTRL, 15);
-        offset += port_byte_in(REG_SCREEN_DATA) as u32;
+        screen_ctrl.write(14);
+        offset = (screen_data.read() as u32) << 8;
+        screen_ctrl.write(15);
+        offset += screen_data.read() as u32;
     }
     offset * 2
 }
@@ -93,7 +116,11 @@ fn scroll_ln(offset: u32) -> u32 {
     unsafe {
         let src = VIDEO_ADDRESS as *const u8;
         let dst = VIDEO_ADDRESS as *mut u8;
-        core::ptr::copy_nonoverlapping(src.add(bytes_per_row as usize), dst, (MAX_ROWS - 1) as usize * bytes_per_row as usize);
+        core::ptr::copy_nonoverlapping(
+            src.add(bytes_per_row as usize),
+            dst,
+            (MAX_ROWS - 1) as usize * bytes_per_row as usize,
+        );
     }
     for col in 0..MAX_COLS {
         set_char_at_video_memory(' ', get_offset(col, MAX_ROWS - 1));

@@ -1,8 +1,10 @@
 #![no_std]
 #![no_main]
 
+use x86_64::instructions::port::{PortRead, PortWrite};
+
 /// Reads a word from PCI configuration space.
-unsafe fn pci_config_read_word(bus: u8, slot: u8, func: u8, offset: u8) -> u16 {
+fn pci_config_read_word(bus: u8, slot: u8, func: u8, offset: u8) -> u16 {
     let lbus = bus as u32;
     let lslot = slot as u32;
     let lfunc = func as u32;
@@ -19,7 +21,7 @@ unsafe fn pci_config_read_word(bus: u8, slot: u8, func: u8, offset: u8) -> u16 {
 }
 
 /// Checks the vendor ID of a PCI device.
-unsafe fn pci_check_vendor(bus: u8, slot: u8) -> Option<u16> {
+fn pci_check_vendor(bus: u8, slot: u8) -> Option<u16> {
     let vendor = pci_config_read_word(bus, slot, 0, 0);
     if vendor != 0xFFFF {
         Some(vendor)
@@ -29,39 +31,31 @@ unsafe fn pci_check_vendor(bus: u8, slot: u8) -> Option<u16> {
 }
 
 /// Checks a specific PCI device.
-unsafe fn check_device(bus: u8, device: u8) {
+fn check_device(bus: u8, device: u8) {
     let function: u8 = 0;
 
     // Get the vendor ID.
     if let Some(vendor_id) = pci_check_vendor(bus, device) {
         // Process the vendor ID.
-        // You can extend this logic to handle devices based on their IDs.
+        // Extend this logic to handle devices based on their IDs.
         check_function(bus, device, function);
     }
 }
 
-/// Placeholder for I/O port functions.
-unsafe fn outl(port: u16, value: u32) {
-    // Write the value to the specified port.
-    core::arch::naked_asm!(
-        "out dx, eax",
-        in("dx") port,
-        in("eax") value
-    );
+/// Writes a 32-bit value to an I/O port.
+fn outl(port: u16, value: u32) {
+    let mut port_write = PortWrite::new(port);
+    port_write.write(value);
 }
 
-unsafe fn inl(port: u16) -> u32 {
-    let value: u32;
-    core::arch::naked_asm!(
-        "in eax, dx",
-        out("eax") value,
-        in("dx") port
-    );
-    value
+/// Reads a 32-bit value from an I/O port.
+fn inl(port: u16) -> u32 {
+    let mut port_read = PortRead::new(port);
+    port_read.read()
 }
 
 /// Placeholder for function-level checks.
-unsafe fn check_function(bus: u8, device: u8, function: u8) {
+fn check_function(bus: u8, device: u8, function: u8) {
     // Check the device function.
     let vendor = pci_config_read_word(bus, device, function, 0);
     if vendor != 0xFFFF {

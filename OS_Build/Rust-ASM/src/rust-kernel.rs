@@ -81,13 +81,14 @@ fn print_nl() {
     }
 }
 
-/// Converts an integer to a string in the specified radix.
+// Converts an integer to a string in the specified radix.
 fn int_to_string(value: u32, buffer: &mut [u8], radix: u32) -> &str {
     assert!(radix >= 2 && radix <= 36);
 
     let mut v = value;
     let mut i = buffer.len();
 
+    // similar to utility.rs but is used for specific VGA text output
     while v != 0 {
         i -= 1;
         buffer[i] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"[(v % radix) as usize];
