@@ -1,1 +1,0 @@
-C:\Users\simon.hamilton\source\repos\Siman73000\Project_Delta_5\OS_Build\kernel\Rust-Kernel\target\debug\project.exe: C:\Users\simon.hamilton\source\repos\Siman73000\Project_Delta_5\OS_Build\kernel\Rust-Kernel\src\main.rs
