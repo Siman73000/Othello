@@ -6,27 +6,10 @@ edition = "2021"
 [dependencies]
 no-std = "0.0.1"
 panic-halt = "1.0.0"
-x86_64 = "0.15.0"
-
-[[bin]]
-name = "rust-display"
-path = "src/rust-display.rs"
 
 [[bin]]
 name = "rust-kernel"
 path = "src/rust-kernel.rs"
-
-[[bin]]
-name = "rust-pci"
-path = "src/rust-pci.rs"
-
-[[bin]]
-name = "rust-ports"
-path = "src/rust-ports.rs"
-
-[[bin]]
-name = "utility"
-path = "src/utility.rs"
 
 
 [profile.dev]
@@ -34,3 +17,9 @@ panic = "abort"
 
 [profile.release]
 panic = "abort"
+
+[build]
+target = "bare_metal.json"
+
+[target.'cfg(target_os = "none")']
+rustflags = ["-C", "linker=ld"]
