@@ -25,10 +25,8 @@ pub fn _start() -> ! {
     match display_type {
         DisplayType::VGA => vga_driver::init(),
         DisplayType::Framebuffer => framebuffer_driver::init(),
-        DisplayType::HDMI | DisplayType::DisplayPort => {
-            // advanced drivers will go here
-            unimplemented!("Nothing to see here yet.");
-        }
+        DisplayType::HDMI => hdmi-driver::init(),
+        DisplayType::DisplayPort => dp_driver::init(),
         DisplayType::Unknown => panic!("Unknown display type."),
     }
     loop {}
