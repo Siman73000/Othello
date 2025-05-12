@@ -12,7 +12,7 @@ The GPT (Global Descriptor Table) defines memory segments for the CPU to utilize
 
 
   | Bits   | Field                              |
-  |:-------|:-----------------------------------|
+  |:-------|:----------------------------------:|
   | 0–15   | Seg Limit (low 16 bits)            |
   | 16–31  | Base Address (low 16 bits)         |
   | 32–39  | Base Address (middle 8 bits)       |
@@ -25,7 +25,7 @@ The GPT (Global Descriptor Table) defines memory segments for the CPU to utilize
   - Access Byte Bit Breakdown:
 
   | Bits   | Field                                                     |
-  |:-------|:----------------------------------------------------------|
+  |:-------|:---------------------------------------------------------:|
   | 0      | (Accessed) Set by CPU when seg is accessed                |
   | 1      | (Write/Read) Data write, code read                        |
   | 2      | (Direction/Conforming) Expands down data or conforms code |
