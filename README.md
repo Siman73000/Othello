@@ -11,4 +11,4 @@ The GPT (Global Descriptor Table) defines memory segments for the CPU to utilize
   - Descriptor Layout for 32-bit Protected Mode
   | Register Numbers | Use Case |
   |:-----------------|---------:|
-  | 0-15             | Seg Limit|
+  | 0-15             | Seg Limi |
