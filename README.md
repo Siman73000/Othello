@@ -41,7 +41,7 @@ The GDT defines your CPU’s memory segments and their permissions (Read/Write/E
   | 6      | (Present) 1 = Seg is valid                                |
 
 
-### disk.asm
+### Disk
 
 `disk.asm` provides the low-level routines that your bootloader uses to read the kernel image off disk via BIOS interrupt 0x13 and place it into memory at a fixed offset.
 
@@ -88,3 +88,23 @@ MSG_LOAD_KERNEL_MBR  db "Loading MBR kernel into memory...", 0
 MSG_LOAD_KERNEL_GPT  db "Loading GPT kernel into memory...", 0
 MSG_SECTORS_ERROR    db "Sector mismatch error!", 0
 
+### mbr_gdt_detection.asm
+
+**Purpose:**  
+Detect whether the disk uses an MBR or GPT partition table (or neither), then print a status message via BIOS teletype.
+
+---
+
+#### Externals & Globals
+- **extern** `print`  
+  BIOS‐teletype routine (AH=0x0E) for outputting characters.
+- **global** `check_partition_table`  
+  Entry point for probing the disk.
+
+#### Constants & Messages
+```asm
+MBR_SIGNATURE       dw 0xAA55            ; MBR magic at offset 510
+GPT_SIGNATURE       db "EFI PART"        ; GPT magic in header
+MBR_MSG             db "MBR Detected",0
+GPT_MSG             db "GPT Detected",0
+NO_PARTITION_MSG    db "No Valid Partition Table Found",0
