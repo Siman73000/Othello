@@ -2,4 +2,9 @@
 
 Operating System Build Version 1.0
 
-Originally build in bare-metal (x86)Assembly and Rust.
+## Bare-Metal Integration
+
+All of the following are manually programmed in x86_64 Assembly.
+
+- Test item
+  - Second test
