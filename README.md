@@ -87,7 +87,7 @@ MSG_DISK_ERROR       db "Disk read error!", 0
 MSG_LOAD_KERNEL_MBR  db "Loading MBR kernel into memory...", 0
 MSG_LOAD_KERNEL_GPT  db "Loading GPT kernel into memory...", 0
 MSG_SECTORS_ERROR    db "Sector mismatch error!", 0
-
+```
 ### mbr_gdt_detection.asm
 
 **Purpose:**  
@@ -108,3 +108,4 @@ GPT_SIGNATURE       db "EFI PART"        ; GPT magic in header
 MBR_MSG             db "MBR Detected",0
 GPT_MSG             db "GPT Detected",0
 NO_PARTITION_MSG    db "No Valid Partition Table Found",0
+```
