@@ -33,3 +33,52 @@ The GPT (Global Descriptor Table) defines memory segments for the CPU to utilize
   | 4      | (Descriptor Type) 1 = Code/Data, 0 = System               |
   | 5      | (DPL0-DPL1) Descriptor Privilege Level / ring             |
   | 6      | (Present) 1 = Seg is valid                                |
+
+
+### disk.asm
+
+`disk.asm` provides the low-level routines that your bootloader uses to read the kernel image off disk via BIOS interrupt 0x13 and place it into memory at a fixed offset.
+
+#### Externals & Globals
+- **extern** `print16`  
+  A 16-bit print routine used for status and error messages.
+- **global** `disk_load`  
+  The core sector‐read function.
+
+#### Constants
+- `KERNEL_OFFSET` (0x1000)  
+  Physical memory offset (in paragraphs) where the kernel will be loaded.
+
+#### Entry Points / API
+1. **`disk_load`**  
+   - **Inputs:**  
+     - `DH` = number of sectors to read  
+     - `CL` = starting sector (e.g. 0x02)  
+     - `CH` = cylinder (here, 0)  
+     - `DH` = head (here, 0)  
+   - **Behavior:**  
+     1. Sets up ES:BX = `0x0000:KERNEL_OFFSET`  
+     2. Calls `int 0x13` with AH=0x02 to read sectors  
+     3. On carry-set, jumps to `disk_error`  
+     4. Verifies sector count matches, else jumps to `sectors_error`  
+     5. On success, returns to caller  
+2. **`load_kernel_mbr`**  
+   - Loads the first 32 sectors (MBR-style) at `KERNEL_OFFSET`  
+   - Prints `MSG_LOAD_KERNEL_MBR` before calling `disk_load`  
+3. **`load_kernel_gpt`**  
+   - Loads the first 64 sectors (GPT-style) at `KERNEL_OFFSET`  
+   - Prints `MSG_LOAD_KERNEL_GPT` before calling `disk_load`
+
+#### Error Handlers
+- **`disk_error`**  
+  Prints `MSG_DISK_ERROR` and halts.
+- **`sectors_error`**  
+  Prints `MSG_SECTORS_ERROR` and halts.
+
+#### Message Strings
+```asm
+MSG_DISK_ERROR       db "Disk read error!", 0
+MSG_LOAD_KERNEL_MBR  db "Loading MBR kernel into memory...", 0
+MSG_LOAD_KERNEL_GPT  db "Loading GPT kernel into memory...", 0
+MSG_SECTORS_ERROR    db "Sector mismatch error!", 0
+
