@@ -8,7 +8,8 @@ All of the following are manually programmed in x86_64 Assembly.
 
 - GPT
 The GPT (Global Descriptor Table) defines memory segments for the CPU to utilize as well as enforces memory Access Control RWE (Read, Write, and Execute permissions). This program also has x86 memory protection and transitions between 16-bit real mode, 32-bit protected mode, and 64-bit long mode.
-  - Descriptor Layout for 32-bit Protected Mode
+  - Descriptor Layout for 32-bit Protected Mode:
+
 
   | Bits   | Field                              |
   |:-------|:-----------------------------------|
@@ -19,3 +20,16 @@ The GPT (Global Descriptor Table) defines memory segments for the CPU to utilize
   | 44–47  | Flags and Seg Limit (high 4 bits)  |
   | 48–55  | Base Address (high 8 bits)         |
   | 56–63  | Reserved for Future Uses           |
+
+
+  - Access Byte Bit Breakdown:
+
+  | Bits   | Field                                                     |
+  |:-------|:----------------------------------------------------------|
+  | 0      | (Accessed) Set by CPU when seg is accessed                |
+  | 1      | (Write/Read) Data write, code read                        |
+  | 2      | (Direction/Conforming) Expands down data or conforms code |
+  | 3      | (Executable) 1 = Code Seg, 0 = Data Seg                   |
+  | 4      | (Descriptor Type) 1 = Code/Data, 0 = System               |
+  | 5      | (DPL0-DPL1) Descriptor Privilege Level / ring             |
+  | 6      | (Present) 1 = Seg is valid                                |
