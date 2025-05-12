@@ -28,7 +28,7 @@ The GDT defines your CPU’s memory segments and their permissions (Read/Write/E
   | 56–63  | Reserved for Future Uses           |
 
 
-  - Access Byte Bit Breakdown:
+####Access Byte Bit Breakdown
 
   | Bits   | Field                                                     |
   |:-------|:---------------------------------------------------------:|
