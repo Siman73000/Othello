@@ -1,14 +1,20 @@
-# Othello
+# Othello OS
 
-Operating System Build Version 1.0
+**Version:** 1.0
 
 ## Bare-Metal Integration
 
-All of the following are manually programmed in x86_64 Assembly.
+> Everything in this OS is hand-crafted in pure x86_64 Assembly, running directly on the hardware.
 
-- GPT
-The GPT (Global Descriptor Table) defines memory segments for the CPU to utilize as well as enforces memory Access Control RWE (Read, Write, and Execute permissions). This program also has x86 memory protection and transitions between 16-bit real mode, 32-bit protected mode, and 64-bit long mode.
-  - Descriptor Layout for 32-bit Protected Mode:
+### Global Descriptor Table (GDT)
+
+The GDT defines your CPU’s memory segments and their permissions (Read/Write/Execute), and it drives the transitions between:
+
+- **Real Mode** (16-bit)  
+- **Protected Mode** (32-bit)  
+- **Long Mode** (64-bit)
+
+#### 32-bit Protected-Mode Descriptor Layout
 
 
   | Bits   | Field                              |
