@@ -88,7 +88,7 @@ MSG_LOAD_KERNEL_MBR  db "Loading MBR kernel into memory...", 0
 MSG_LOAD_KERNEL_GPT  db "Loading GPT kernel into memory...", 0
 MSG_SECTORS_ERROR    db "Sector mismatch error!", 0
 ```
-### mbr_gdt_detection.asm
+### MBR/GDT Detection
 
 **Purpose:**  
 Detect whether the disk uses an MBR or GPT partition table (or neither), then print a status message via BIOS teletype.
@@ -108,4 +108,118 @@ GPT_SIGNATURE       db "EFI PART"        ; GPT magic in header
 MBR_MSG             db "MBR Detected",0
 GPT_MSG             db "GPT Detected",0
 NO_PARTITION_MSG    db "No Valid Partition Table Found",0
+```
+
+
+### Kernel Entry Point
+
+**Purpose:**  
+Initialize the CPU for 64-bit operation, set up segment registers and stack, then jump into your C/Rust kernel entry point.
+
+---
+
+#### Externals & Globals
+- **extern** `kernel_main`  
+  Your high-level kernel’s entry function (written in C, Rust, etc.).
+- **global** `_start`, `kernel_entry`  
+  Entry symbols the linker/bootloader will use.
+
+---
+
+#### Layout
+
+```asm
+[bits 64]
+
+global kernel_entry
+extern kernel_main
+
+section .text
+global _start
+
+kernel_entry:
+    ; 1) Set up data segment registers for long mode
+    mov ax, 0x10             ; DATA_SEG selector (64-bit GDT entry)
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+    mov ss, ax
+
+    ; 2) Initialize the stack pointer
+    mov rsp, 0x90000         ; Point RSP at your kernel stack
+
+    ; 3) Call into the high-level kernel
+    call kernel_main
+
+    ; 4) If kernel_main ever returns, halt here forever
+    hlt
+    jmp $
+```
+
+
+### 16-bit Print Operations
+
+**Purpose:**  
+A collection of BIOS‐teletype (AH=0x0E) routines for outputting text and basic primitives in 16-bit real mode.
+
+---
+
+#### Exports
+```asm
+global print16
+global print16_nl
+```
+
+
+### 32-bit Print Operations
+
+**Purpose:**  
+A simple 32-bit protected-mode routine that writes a null-terminated ASCII string directly into VGA text-mode memory (0xB8000) with a fixed white-on-black attribute.
+
+---
+
+#### Exports
+```asm
+global print32
+```
+
+
+### Switch from 16-bit to 32-bit
+
+**Purpose:**  
+Perform a three-stage CPU mode switch:  
+1. Real mode → 32-bit protected mode  
+2. Protected mode setup (segments, stack)  
+3. 32-bit → 64-bit long mode  
+
+---
+
+#### Externals & Globals
+```asm
+extern gdt_descriptor    ; GDT descriptor (limit + base) for LGDT
+extern CODE_SEG         ; 32-bit code segment selector
+extern DATA_SEG         ; 32-bit data segment selector
+extern CODE_SEG_64      ; 64-bit code segment selector
+extern BEGIN_32BIT      ; Optional 32-bit entry routine
+extern BEGIN_64BIT      ; 64-bit entry routine
+extern pml4_table       ; Physical address of your PML4 page table
+global  switchto64bit   ; Entry point for the transition
+```
+
+
+### Switching from 32-bit to 64-bit
+
+**Purpose:**  
+Enable Physical Address Extension (PAE), turn on long mode, and jump into 64-bit kernel code.
+
+---
+
+#### Externals & Globals
+```asm
+extern gdt_descriptor    ; GDT limit & base for LGDT
+extern CODE_SEG_64      ; 64-bit code segment selector
+extern DATA_SEG         ; 64-bit data segment selector
+extern BEGIN_64BIT      ; 64-bit kernel entry point
+global  switchto64bit   ; Entry to transition from protected to long mode
 ```
