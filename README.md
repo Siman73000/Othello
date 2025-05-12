@@ -4,7 +4,7 @@
 
 ## Overview
 
-Othello is a minimal, hand-crafted operating system written entirely in x86_64 assembly. It demonstrates the complete CPU boot process—from real mode through protected mode and into long mode—while providing a simple foundation for kernel development in higher-level languages (C, Rust) or additional assembly.
+Othello is a minimal, hand-crafted operating system written in x86_64 Assembly, Rust, and C. It demonstrates the complete CPU boot process—from real mode through protected mode and into long mode—while providing a GUI and CLI for development or general use.
 
 ### Goals
 - **Education:** Expose each step of the mode transitions and hardware setup.  
