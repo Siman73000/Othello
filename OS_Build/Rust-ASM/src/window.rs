@@ -2,6 +2,7 @@
 #![no_std]
 
 use core::cell::RefCell;
+use std::io;
 
 struct Window {
     x: usize,
@@ -58,7 +59,8 @@ fn handle_event(event: Event) {
         }
         Event::KeyPress { key } => {
             for window in WINDOWS.borrow().iter() {
-                // handle key press
+                let mut input = String::new();
+                io::stdin().read_line(&mut input_string).unwrap();
             }
         }
     }

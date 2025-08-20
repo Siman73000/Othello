@@ -25,7 +25,7 @@ pub fn _start() -> ! {
     match display_type {
         DisplayType::VGA => vga_driver::init(),
         DisplayType::Framebuffer => framebuffer_driver::init(),
-        DisplayType::HDMI => hdmi-driver::init(),
+        DisplayType::HDMI => hdmi_driver::init(),
         DisplayType::DisplayPort => dp_driver::init(),
         DisplayType::Unknown => panic!("Unknown display type."),
     }
@@ -58,8 +58,6 @@ fn query_pci_for_dp() -> bool {
     false
 }
 
-// updates hardware cursor pos
-// the pos is split into high & low bytes then sent to VGA ports 0x3d4 & 0x3d5
 fn set_cursor(offset: u32) {
     let offset = offset / 2;
     let mut screen_ctrl = PortWriteOnly::new(REG_SCREEN_CTRL);
@@ -73,8 +71,7 @@ fn set_cursor(offset: u32) {
     }
 }
 
-// gets the current cursor pos from VGA controller
-// returns offset in vid mem
+or pos from VGA controller
 fn get_cursor() -> u32 {
     let mut screen_ctrl = Port::new(REG_SCREEN_CTRL);
     let mut screen_data = Port::new(REG_SCREEN_DATA);
