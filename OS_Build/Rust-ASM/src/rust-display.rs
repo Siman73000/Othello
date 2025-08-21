@@ -51,11 +51,43 @@ fn query_framebuffer() -> Option<FrameBufferInfo> {
 }
 
 fn query_pci_for_hdmi() -> bool {
-    false
+    let mut hdmi_port = Port::new(0x3c0);
+    unsafe {
+        hdmi_port.write(0x00); // Read status register
+        let status = hdmi_port.read();
+        if status & 0x04 == 0 {
+            return false; // No HDMI controller present
+        }
+        (status & 0x04) != 0 // Check if HDMI is present
+        hdmi-driver(::init());
+    }
+}
+
+fn query_pci_for_vga() -> bool {
+    // Check for VGA controller presence
+    let mut vga_port = Port::new(0x3c0);
+    unsafe {
+        vga_port.write(0x00); // Read status register
+        let status = vga_port.read();
+        if status & 0x01 == 0 {
+            return false; // No VGA controller present
+        }
+        (status & 0x01) != 0 // Check if VGA is present
+        vga_driver(::init());
+    }
 }
 
 fn query_pci_for_dp() -> bool {
-    false
+    let mut dp_port = Port::new(0x3c0);
+    unsafe {
+        dp_port.write(0x00); // Read status register
+        let status = dp_port.read();
+        if status & 0x02 == 0 {
+            return false;
+        }
+        (status & 0x02) != 0
+        dp-driver::init();
+    }
 }
 
 fn set_cursor(offset: u32) {

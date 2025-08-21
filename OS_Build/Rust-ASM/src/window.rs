@@ -3,6 +3,11 @@
 
 use core::cell::RefCell;
 use std::io;
+use winit::{
+    event::{Event, WindowEvent},
+    event_loop::{ControlFlow, EventLoop},
+    window::WindowBuilder,
+}
 
 struct Window {
     x: usize,
@@ -46,14 +51,24 @@ fn handle_event(event: Event) {
         Event::MouseClick { x, y } => {
             for window in WINDOWS.borrow().iter() {
                 if x >= window.x && x < window.x + window.width && y >= window.y && y < window.y + window.height {
-                    // handle mouse click
+                    let mut input_string = String::new();
+                    io::stdin().read_line(&mut input_string).unwrap();
+                    println!("Mouse clicked at ({}, {}) in window at ({}, {})", x, y, window.x, window.y);
+                    for i in 0..window.buffer.len() {
+                        window.buffer[i] = 0x000000;
+                    }
                 }
             }
         }
         Event::MouseMove { x, y } => {
             for window in WINDOWS.borrow().iter() {
                 if x >= window.x && x < window.x + window.width && y >= window.y && y < window.y + window.height {
-                    // handle mouse move
+                    let mut input_string = String::new();
+                    io::stdin().read_line(&mut input_string).unwrap();
+                    println!("Mouse moved to ({}, {}) in window at ({}, {})", x, y, window.x, window.y);
+                    for i in 0..window.buffer.len() {
+                        window.buffer[i] = 0xFFFFFF;
+                    }
                 }
             }
         }
