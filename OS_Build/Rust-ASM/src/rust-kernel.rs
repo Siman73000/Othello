@@ -111,4 +111,7 @@ fn kernel_main() -> ! {
             print_nl();
         }
     }
+    if (number_str == "netscan") {
+        network_Scan();
+    }
 }
