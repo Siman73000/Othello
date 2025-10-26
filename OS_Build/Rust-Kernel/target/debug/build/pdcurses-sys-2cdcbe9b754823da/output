@@ -1,0 +1,235 @@
+cargo:rustc-link-lib=dylib=user32
+cargo:rustc-link-lib=dylib=gdi32
+cargo:rustc-link-lib=dylib=comdlg32
+cargo:rustc-link-lib=dylib=shell32
+OUT_DIR = Some(C:\Users\simon.hamilton\Othello\OS_Build\Rust-Kernel\target\debug\build\pdcurses-sys-2cdcbe9b754823da\out)
+OPT_LEVEL = Some(0)
+TARGET = Some(x86_64-pc-windows-msvc)
+CARGO_ENCODED_RUSTFLAGS = Some()
+cargo:rerun-if-env-changed=VCINSTALLDIR
+VCINSTALLDIR = None
+cargo:rerun-if-env-changed=VSTEL_MSBuildProjectFullPath
+VSTEL_MSBuildProjectFullPath = None
+cargo:rerun-if-env-changed=VCToolsVersion
+VCToolsVersion = None
+cargo:rerun-if-env-changed=VSCMD_ARG_VCVARS_SPECTRE
+VSCMD_ARG_VCVARS_SPECTRE = None
+cargo:rerun-if-env-changed=WindowsSdkDir
+WindowsSdkDir = None
+cargo:rerun-if-env-changed=WindowsSDKVersion
+WindowsSDKVersion = None
+cargo:rerun-if-env-changed=LIB
+LIB = None
+PATH = Some(C:\Users\simon.hamilton\Othello\OS_Build\Rust-Kernel\target\debug\deps;C:\Users\simon.hamilton\Othello\OS_Build\Rust-Kernel\target\debug;C:\Users\simon.hamilton\.rustup\toolchains\stable-x86_64-pc-windows-msvc\lib\rustlib\x86_64-pc-windows-msvc\lib;C:\Program Files\Microsoft\jdk-17.0.14.7-hotspot\bin;C:\WINDOWS\system32;C:\WINDOWS;C:\WINDOWS\System32\Wbem;C:\WINDOWS\System32\WindowsPowerShell\v1.0\;C:\WINDOWS\System32\OpenSSH\;C:\Program Files\dotnet\;C:\Program Files\Git\cmd;C:\Program Files\Microsoft SQL Server\150\Tools\Binn\;C:\Program Files\Microsoft SQL Server\Client SDK\ODBC\170\Tools\Binn\;C:\Program Files (x86)\Windows Kits\10\Windows Performance Toolkit\;C:\Program Files\Docker\Docker\resources\bin;c:\Users\simon.hamilton\AppData\Local\Programs\cursor\resources\app\bin;C:\WINDOWS\system32;C:\WINDOWS;C:\WINDOWS\System32\Wbem;C:\WINDOWS\System32\WindowsPowerShell\v1.0\;C:\WINDOWS\System32\OpenSSH\;C:\Program Files\Wolfram Research\WolframScript\;C:\Users\simon.hamilton\.cargo\bin;C:\Users\simon.hamilton\AppData\Local\Programs\Python\Python313\Scripts\;C:\Users\simon.hamilton\AppData\Local\Programs\Python\Python313\;C:\Users\simon.hamilton\AppData\Local\Microsoft\WindowsApps;C:\Users\simon.hamilton\AppData\Local\Programs\Microsoft VS Code\bin;C:\Automation\sqlite-dll-win-x64-3470200;C:\Automation\sqlite-tools-win-x64-3470200;C:\Users\simon.hamilton\.dotnet\tools;C:\Users\simon.hamilton\AppData\Local\Programs\cursor\resources\app\bin;;c:\Users\simon.hamilton\AppData\Roaming\Code\User\globalStorage\github.copilot-chat\debugCommand)
+cargo:rerun-if-env-changed=INCLUDE
+INCLUDE = None
+HOST = Some(x86_64-pc-windows-msvc)
+cargo:rerun-if-env-changed=CC_x86_64-pc-windows-msvc
+CC_x86_64-pc-windows-msvc = None
+cargo:rerun-if-env-changed=CC_x86_64_pc_windows_msvc
+CC_x86_64_pc_windows_msvc = None
+cargo:rerun-if-env-changed=HOST_CC
+HOST_CC = None
+cargo:rerun-if-env-changed=CC
+CC = None
+cargo:rerun-if-env-changed=CRATE_CC_NO_DEFAULTS
+CRATE_CC_NO_DEFAULTS = None
+CARGO_CFG_TARGET_FEATURE = Some(cmpxchg16b,fxsr,sse,sse2,sse3)
+DEBUG = Some(true)
+cargo:rerun-if-env-changed=CFLAGS
+CFLAGS = None
+cargo:rerun-if-env-changed=HOST_CFLAGS
+HOST_CFLAGS = None
+cargo:rerun-if-env-changed=CFLAGS_x86_64_pc_windows_msvc
+CFLAGS_x86_64_pc_windows_msvc = None
+cargo:rerun-if-env-changed=CFLAGS_x86_64-pc-windows-msvc
+CFLAGS_x86_64-pc-windows-msvc = None
+cargo:rerun-if-env-changed=CC_ENABLE_DEBUG_OUTPUT
+addch.c
+addchstr.c
+addstr.c
+attr.c
+src/PDCurses/pdcurses/attr.c(205): warning C4100: 'opts': unreferenced formal parameter
+src/PDCurses/pdcurses/attr.c(224): warning C4100: 'opts': unreferenced formal parameter
+src/PDCurses/pdcurses/attr.c(247): warning C4100: 'opts': unreferenced formal parameter
+src/PDCurses/pdcurses/attr.c(254): warning C4100: 'opts': unreferenced formal parameter
+src/PDCurses/pdcurses/attr.c(261): warning C4100: 'opts': unreferenced formal parameter
+src/PDCurses/pdcurses/attr.c(268): warning C4100: 'opts': unreferenced formal parameter
+src/PDCurses/pdcurses/attr.c(275): warning C4100: 'opts': unreferenced formal parameter
+src/PDCurses/pdcurses/attr.c(294): warning C4100: 'opts': unreferenced formal parameter
+beep.c
+bkgd.c
+border.c
+clear.c
+color.c
+src/PDCurses/pdcurses/color.c(122): warning C4996: 'getenv': This function or variable may be unsafe. Consider using _dupenv_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+src/PDCurses/pdcurses/color.c(243): warning C4244: '=': conversion from 'int' to 'short', possible loss of data
+src/PDCurses/pdcurses/color.c(244): warning C4244: '=': conversion from 'int' to 'short', possible loss of data
+debug.c
+src/PDCurses/pdcurses/debug.c(52): warning C4996: 'fopen': This function or variable may be unsafe. Consider using fopen_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+src/PDCurses/pdcurses/debug.c(61): warning C4996: 'localtime': This function or variable may be unsafe. Consider using localtime_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+delch.c
+deleteln.c
+deprec.c
+getch.c
+src/PDCurses/pdcurses/getch.c(95): warning C4100: 'win': unreferenced formal parameter
+src/PDCurses/pdcurses/getch.c(381): warning C4244: '=': conversion from 'int' to 'wint_t', possible loss of data
+getstr.c
+src/PDCurses/pdcurses/getstr.c(323): warning C4244: '=': conversion from 'int' to 'wint_t', possible loss of data
+src/PDCurses/pdcurses/getstr.c(389): warning C4244: '=': conversion from 'int' to 'wint_t', possible loss of data
+getyx.c
+inch.c
+inchstr.c
+initscr.c
+src/PDCurses/pdcurses/initscr.c(266): warning C4100: 'infd': unreferenced formal parameter
+src/PDCurses/pdcurses/initscr.c(266): warning C4100: 'outfd': unreferenced formal parameter
+src/PDCurses/pdcurses/initscr.c(266): warning C4100: 'type': unreferenced formal parameter
+inopts.c
+src/PDCurses/pdcurses/inopts.c(169): warning C4100: 'bf': unreferenced formal parameter
+src/PDCurses/pdcurses/inopts.c(169): warning C4100: 'win': unreferenced formal parameter
+src/PDCurses/pdcurses/inopts.c(188): warning C4100: 'win': unreferenced formal parameter
+src/PDCurses/pdcurses/inopts.c(227): warning C4100: 'flag': unreferenced formal parameter
+src/PDCurses/pdcurses/inopts.c(227): warning C4100: 'win': unreferenced formal parameter
+src/PDCurses/pdcurses/inopts.c(264): warning C4100: 'fildes': unreferenced formal parameter
+insch.c
+insstr.c
+instr.c
+kernel.c
+keyname.c
+src/PDCurses/pdcurses/keyname.c(137): warning C4996: 'strcpy': This function or variable may be unsafe. Consider using strcpy_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+mouse.c
+move.c
+outopts.c
+src/PDCurses/pdcurses/outopts.c(83): warning C4100: 'bf': unreferenced formal parameter
+src/PDCurses/pdcurses/outopts.c(83): warning C4100: 'win': unreferenced formal parameter
+src/PDCurses/pdcurses/outopts.c(90): warning C4100: 'bf': unreferenced formal parameter
+src/PDCurses/pdcurses/outopts.c(90): warning C4100: 'win': unreferenced formal parameter
+overlay.c
+pad.c
+panel.c
+printw.c
+src/PDCurses/pdcurses/printw.c(54): warning C4996: 'vsprintf': This function or variable may be unsafe. Consider using vsprintf_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+refresh.c
+scanw.c
+scr_dump.c
+src/PDCurses/pdcurses/scr_dump.c(169): warning C4996: 'fopen': This function or variable may be unsafe. Consider using fopen_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+src/PDCurses/pdcurses/scr_dump.c(179): warning C4100: 'filename': unreferenced formal parameter
+src/PDCurses/pdcurses/scr_dump.c(192): warning C4996: 'fopen': This function or variable may be unsafe. Consider using fopen_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+scroll.c
+slk.c
+src/PDCurses/pdcurses/slk.c(372): warning C4100: 'opts': unreferenced formal parameter
+src/PDCurses/pdcurses/slk.c(391): warning C4100: 'opts': unreferenced formal parameter
+src/PDCurses/pdcurses/slk.c(422): warning C4100: 'opts': unreferenced formal parameter
+termattr.c
+src/PDCurses/pdcurses/termattr.c(115): warning C4996: 'sprintf': This function or variable may be unsafe. Consider using sprintf_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+terminfo.c
+src/PDCurses/pdcurses/terminfo.c(55): warning C4100: 'oldcol': unreferenced formal parameter
+src/PDCurses/pdcurses/terminfo.c(55): warning C4100: 'oldrow': unreferenced formal parameter
+src/PDCurses/pdcurses/terminfo.c(70): warning C4100: 'attr': unreferenced formal parameter
+src/PDCurses/pdcurses/terminfo.c(77): warning C4100: 'opt': unreferenced formal parameter
+src/PDCurses/pdcurses/terminfo.c(77): warning C4100: 'color_pair': unreferenced formal parameter
+src/PDCurses/pdcurses/terminfo.c(77): warning C4100: 'attr': unreferenced formal parameter
+src/PDCurses/pdcurses/terminfo.c(84): warning C4100: 'putfunc': unreferenced formal parameter
+src/PDCurses/pdcurses/terminfo.c(84): warning C4100: 'attr': unreferenced formal parameter
+src/PDCurses/pdcurses/terminfo.c(91): warning C4100: 'putfunc': unreferenced formal parameter
+src/PDCurses/pdcurses/terminfo.c(91): warning C4100: 'opt': unreferenced formal parameter
+src/PDCurses/pdcurses/terminfo.c(91): warning C4100: 'color_pair': unreferenced formal parameter
+src/PDCurses/pdcurses/terminfo.c(91): warning C4100: 'attr': unreferenced formal parameter
+src/PDCurses/pdcurses/terminfo.c(98): warning C4100: 'oterm': unreferenced formal parameter
+src/PDCurses/pdcurses/terminfo.c(105): warning C4100: 'str': unreferenced formal parameter
+src/PDCurses/pdcurses/terminfo.c(112): warning C4100: 'filedes': unreferenced formal parameter
+src/PDCurses/pdcurses/terminfo.c(112): warning C4100: 'term': unreferenced formal parameter
+src/PDCurses/pdcurses/terminfo.c(122): warning C4100: 'nterm': unreferenced formal parameter
+src/PDCurses/pdcurses/terminfo.c(129): warning C4100: 'term': unreferenced formal parameter
+src/PDCurses/pdcurses/terminfo.c(136): warning C4100: 'filedes': unreferenced formal parameter
+src/PDCurses/pdcurses/terminfo.c(136): warning C4100: 'term': unreferenced formal parameter
+src/PDCurses/pdcurses/terminfo.c(148): warning C4100: 'name': unreferenced formal parameter
+src/PDCurses/pdcurses/terminfo.c(148): warning C4100: 'bp': unreferenced formal parameter
+src/PDCurses/pdcurses/terminfo.c(155): warning C4100: 'id': unreferenced formal parameter
+src/PDCurses/pdcurses/terminfo.c(162): warning C4100: 'id': unreferenced formal parameter
+src/PDCurses/pdcurses/terminfo.c(169): warning C4100: 'area': unreferenced formal parameter
+src/PDCurses/pdcurses/terminfo.c(169): warning C4100: 'id': unreferenced formal parameter
+src/PDCurses/pdcurses/terminfo.c(176): warning C4100: 'row': unreferenced formal parameter
+src/PDCurses/pdcurses/terminfo.c(176): warning C4100: 'col': unreferenced formal parameter
+src/PDCurses/pdcurses/terminfo.c(176): warning C4100: 'cap': unreferenced formal parameter
+src/PDCurses/pdcurses/terminfo.c(183): warning C4100: 'capname': unreferenced formal parameter
+src/PDCurses/pdcurses/terminfo.c(190): warning C4100: 'capname': unreferenced formal parameter
+src/PDCurses/pdcurses/terminfo.c(197): warning C4100: 'capname': unreferenced formal parameter
+src/PDCurses/pdcurses/terminfo.c(205): warning C4100: 'p9': unreferenced formal parameter
+src/PDCurses/pdcurses/terminfo.c(205): warning C4100: 'p8': unreferenced formal parameter
+src/PDCurses/pdcurses/terminfo.c(205): warning C4100: 'p7': unreferenced formal parameter
+src/PDCurses/pdcurses/terminfo.c(205): warning C4100: 'p6': unreferenced formal parameter
+src/PDCurses/pdcurses/terminfo.c(205): warning C4100: 'p5': unreferenced formal parameter
+src/PDCurses/pdcurses/terminfo.c(204): warning C4100: 'p4': unreferenced formal parameter
+src/PDCurses/pdcurses/terminfo.c(204): warning C4100: 'p3': unreferenced formal parameter
+src/PDCurses/pdcurses/terminfo.c(204): warning C4100: 'p2': unreferenced formal parameter
+src/PDCurses/pdcurses/terminfo.c(204): warning C4100: 'p1': unreferenced formal parameter
+src/PDCurses/pdcurses/terminfo.c(204): warning C4100: 'cap': unreferenced formal parameter
+src/PDCurses/pdcurses/terminfo.c(212): warning C4100: 'putfunc': unreferenced formal parameter
+src/PDCurses/pdcurses/terminfo.c(212): warning C4100: 'affcnt': unreferenced formal parameter
+src/PDCurses/pdcurses/terminfo.c(212): warning C4100: 'str': unreferenced formal parameter
+touch.c
+util.c
+src/PDCurses/pdcurses/util.c(120): warning C4100: 'x': unreferenced formal parameter
+src/PDCurses/pdcurses/util.c(134): warning C4100: 'opts': unreferenced formal parameter
+src/PDCurses/pdcurses/util.c(158): warning C4100: 'opts': unreferenced formal parameter
+src/PDCurses/pdcurses/util.c(261): warning C4245: 'return': conversion from 'int' to 'size_t', signed/unsigned mismatch
+window.c
+pdcclip.c
+pdcdisp.c
+src/PDCurses/win32a/pdcdisp.c(203): warning C4996: 'wcscpy': This function or variable may be unsafe. Consider using wcscpy_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+src/PDCurses/win32a/pdcdisp.c(205): warning C4996: 'wcscpy': This function or variable may be unsafe. Consider using wcscpy_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+src/PDCurses/win32a/pdcdisp.c(207): warning C4996: 'wcscpy': This function or variable may be unsafe. Consider using wcscpy_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+src/PDCurses/win32a/pdcdisp.c(254): warning C4996: 'wcscpy': This function or variable may be unsafe. Consider using wcscpy_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+pdcgetsc.c
+pdckbd.c
+src/PDCurses/win32a/pdckbd.c(31): warning C4100: 'on': unreferenced formal parameter
+pdcscrn.c
+src/PDCurses/win32a/pdcscrn.c(663): warning C4456: declaration of 'i' hides previous local declaration
+src/PDCurses/win32a/pdcscrn.c(588): note: see declaration of 'i'
+src/PDCurses/win32a/pdcscrn.c(1093): warning C4996: '_wsplitpath': This function or variable may be unsafe. Consider using _wsplitpath_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+src/PDCurses/win32a/pdcscrn.c(1097): warning C4996: 'wcscat': This function or variable may be unsafe. Consider using wcscat_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+src/PDCurses/win32a/pdcscrn.c(1098): warning C4996: 'wcscat': This function or variable may be unsafe. Consider using wcscat_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+src/PDCurses/win32a/pdcscrn.c(1107): warning C4996: '_splitpath': This function or variable may be unsafe. Consider using _splitpath_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+src/PDCurses/win32a/pdcscrn.c(1111): warning C4996: 'strcat': This function or variable may be unsafe. Consider using strcat_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+src/PDCurses/win32a/pdcscrn.c(1112): warning C4996: 'strcat': This function or variable may be unsafe. Consider using strcat_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+src/PDCurses/win32a/pdcscrn.c(1114): warning C4996: 'mbstowcs': This function or variable may be unsafe. Consider using mbstowcs_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+src/PDCurses/win32a/pdcscrn.c(1120): warning C4996: '_wsplitpath': This function or variable may be unsafe. Consider using _wsplitpath_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+src/PDCurses/win32a/pdcscrn.c(1121): warning C4996: '_wcslwr': This function or variable may be unsafe. Consider using _wcslwr_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+src/PDCurses/win32a/pdcscrn.c(1159): warning C4996: '_wcslwr': This function or variable may be unsafe. Consider using _wcslwr_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+src/PDCurses/win32a/pdcscrn.c(1189): warning C4459: declaration of 'menu_shown' hides global declaration
+src/PDCurses/win32a/pdcscrn.c(12): note: see declaration of 'menu_shown'
+src/PDCurses/win32a/pdcscrn.c(1214): warning C4996: 'wcscat': This function or variable may be unsafe. Consider using wcscat_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+src/PDCurses/win32a/pdcscrn.c(1390): warning C4459: declaration of 'menu_shown' hides global declaration
+src/PDCurses/win32a/pdcscrn.c(12): note: see declaration of 'menu_shown'
+src/PDCurses/win32a/pdcscrn.c(1431): warning C4459: declaration of 'menu_shown' hides global declaration
+src/PDCurses/win32a/pdcscrn.c(12): note: see declaration of 'menu_shown'
+src/PDCurses/win32a/pdcscrn.c(1453): warning C4996: 'swscanf': This function or variable may be unsafe. Consider using swscanf_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+src/PDCurses/win32a/pdcscrn.c(1460): warning C4996: 'wcscpy': This function or variable may be unsafe. Consider using wcscpy_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+src/PDCurses/win32a/pdcscrn.c(1801): warning C4100: 'wParam': unreferenced formal parameter
+src/PDCurses/win32a/pdcscrn.c(1871): warning C4244: 'initializing': conversion from 'BOOL' to 'const bool', possible loss of data
+src/PDCurses/win32a/pdcscrn.c(2533): warning C4996: 'strcpy': This function or variable may be unsafe. Consider using strcpy_s instead. To disable deprecation, use _CRT_SECURE_NO_WARNINGS. See online help for details.
+src/PDCurses/win32a/pdcscrn.c(2619): warning C4100: 'i': unreferenced formal parameter
+src/PDCurses/win32a/pdcscrn.c(2623): warning C4100: 'i': unreferenced formal parameter
+C:\Users\simon.hamilton\.cargo\registry\src\index.crates.io-6f17d22bba15001f\pdcurses-sys-0.7.1\src\PDCurses\win32a\pdcscrn.c(90) : warning C4702: unreachable code
+pdcsetsc.c
+pdcutil.c
+cargo:rerun-if-env-changed=AR_x86_64-pc-windows-msvc
+AR_x86_64-pc-windows-msvc = None
+cargo:rerun-if-env-changed=AR_x86_64_pc_windows_msvc
+AR_x86_64_pc_windows_msvc = None
+cargo:rerun-if-env-changed=HOST_AR
+HOST_AR = None
+cargo:rerun-if-env-changed=AR
+AR = None
+cargo:rerun-if-env-changed=ARFLAGS
+ARFLAGS = None
+cargo:rerun-if-env-changed=HOST_ARFLAGS
+HOST_ARFLAGS = None
+cargo:rerun-if-env-changed=ARFLAGS_x86_64_pc_windows_msvc
+ARFLAGS_x86_64_pc_windows_msvc = None
+cargo:rerun-if-env-changed=ARFLAGS_x86_64-pc-windows-msvc
+ARFLAGS_x86_64-pc-windows-msvc = None
+cargo:rustc-link-search=native=C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.42.34433\atlmfc\lib\x64
+cargo:rustc-link-lib=static=pdcurses
+cargo:rustc-link-search=native=C:\Users\simon.hamilton\Othello\OS_Build\Rust-Kernel\target\debug\build\pdcurses-sys-2cdcbe9b754823da\out

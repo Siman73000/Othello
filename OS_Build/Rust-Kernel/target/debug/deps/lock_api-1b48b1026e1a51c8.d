@@ -1,0 +1,10 @@
+C:\Users\simon.hamilton\Othello\OS_Build\Rust-Kernel\target\debug\deps\liblock_api-1b48b1026e1a51c8.rmeta: C:\Users\simon.hamilton\.cargo\registry\src\index.crates.io-6f17d22bba15001f\lock_api-0.4.14\src/lib.rs C:\Users\simon.hamilton\.cargo\registry\src\index.crates.io-6f17d22bba15001f\lock_api-0.4.14\src\mutex.rs C:\Users\simon.hamilton\.cargo\registry\src\index.crates.io-6f17d22bba15001f\lock_api-0.4.14\src\remutex.rs C:\Users\simon.hamilton\.cargo\registry\src\index.crates.io-6f17d22bba15001f\lock_api-0.4.14\src\rwlock.rs
+
+C:\Users\simon.hamilton\Othello\OS_Build\Rust-Kernel\target\debug\deps\liblock_api-1b48b1026e1a51c8.rlib: C:\Users\simon.hamilton\.cargo\registry\src\index.crates.io-6f17d22bba15001f\lock_api-0.4.14\src/lib.rs C:\Users\simon.hamilton\.cargo\registry\src\index.crates.io-6f17d22bba15001f\lock_api-0.4.14\src\mutex.rs C:\Users\simon.hamilton\.cargo\registry\src\index.crates.io-6f17d22bba15001f\lock_api-0.4.14\src\remutex.rs C:\Users\simon.hamilton\.cargo\registry\src\index.crates.io-6f17d22bba15001f\lock_api-0.4.14\src\rwlock.rs
+
+C:\Users\simon.hamilton\Othello\OS_Build\Rust-Kernel\target\debug\deps\lock_api-1b48b1026e1a51c8.d: C:\Users\simon.hamilton\.cargo\registry\src\index.crates.io-6f17d22bba15001f\lock_api-0.4.14\src/lib.rs C:\Users\simon.hamilton\.cargo\registry\src\index.crates.io-6f17d22bba15001f\lock_api-0.4.14\src\mutex.rs C:\Users\simon.hamilton\.cargo\registry\src\index.crates.io-6f17d22bba15001f\lock_api-0.4.14\src\remutex.rs C:\Users\simon.hamilton\.cargo\registry\src\index.crates.io-6f17d22bba15001f\lock_api-0.4.14\src\rwlock.rs
+
+C:\Users\simon.hamilton\.cargo\registry\src\index.crates.io-6f17d22bba15001f\lock_api-0.4.14\src/lib.rs:
+C:\Users\simon.hamilton\.cargo\registry\src\index.crates.io-6f17d22bba15001f\lock_api-0.4.14\src\mutex.rs:
+C:\Users\simon.hamilton\.cargo\registry\src\index.crates.io-6f17d22bba15001f\lock_api-0.4.14\src\remutex.rs:
+C:\Users\simon.hamilton\.cargo\registry\src\index.crates.io-6f17d22bba15001f\lock_api-0.4.14\src\rwlock.rs:

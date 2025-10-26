@@ -1,0 +1,32 @@
+[package]
+name = "Rust-Kernel"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+display = "0.1.2"
+mutex = "1.0.2"
+panic-halt = "1.0.0"
+spin = "0.10"
+
+x86_64 = { version = "0.15.2", default-features = false, features = ["instructions"] }
+
+[[bin]]
+name = "rust-kernel"
+path = "src/rust-kernel.rs"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+
+# Build settings for bare-metal
+[build]
+target = "bare_metal.json"
+
+[target.'cfg(target_os = "none")']
+rustflags = [
+    "-C", "linker=ld",
+    "-C", "opt-level=2",
+]
