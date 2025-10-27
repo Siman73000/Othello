@@ -1,26 +1,34 @@
-[bits 64]
+[BITS 64]
 
-global kernel_entry
-extern kernel_main
+global kernel_entry      ; Exported symbol for linker
+extern kernel_main       ; Rust kernel entry point
 
 section .text
-global _start
 
 kernel_entry:
-    ; Set up segment registers for 64-bit mode
-    mov ax, 0x10             ; DATA_SEG selector (64-bit)
+    ; --------------------------
+    ; Set up segment registers
+    ; --------------------------
+    mov ax, 0x10         ; DATA_SEG selector (from GDT)
     mov ds, ax
     mov es, ax
     mov fs, ax
     mov gs, ax
     mov ss, ax
 
-    ; Set up the stack for 64-bit mode
-    mov rsp, 0x90000         ; Adjust to your stack location
+    ; --------------------------
+    ; Set up stack pointer
+    ; --------------------------
+    mov rsp, 0x90000
 
-    ; Call the kernel's main function
+    ; --------------------------
+    ; Call Rust kernel main
+    ; --------------------------
     call kernel_main
 
-    ; Halt the CPU after returning from kernel_main
+    ; --------------------------
+    ; Halt CPU when kernel_main returns
+    ; --------------------------
+.halt_loop:
     hlt
-    jmp $
+    jmp .halt_loop

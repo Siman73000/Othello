@@ -1,5 +1,3 @@
-#![no_std]
-#![no_main]
 
 use x86_64::instructions::port::{PortRead, PortWrite};
 

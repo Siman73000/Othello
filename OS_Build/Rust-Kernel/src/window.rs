@@ -1,13 +1,15 @@
-#![no_std]
-#![no_main]
-
 extern crate alloc;
 
-use alloc::vec::Vec;
-use core::cell::RefCell;
 use crate::display::{set_pixel, clear_screen, commit_framebuffer};
 use crate::network_drivers::poll_input_event;
+use crate::MAX_WINDOWS;
+use core::convert::TryInto;
 use spin::Mutex;
+
+// Local stub for mouse position
+pub fn poll_mouse_position() -> (usize, usize) {
+    (0, 0) // Replace with real mouse logic later
+}
 
 // Window structure
 pub struct Window {
@@ -15,53 +17,93 @@ pub struct Window {
     pub y: usize,
     pub width: usize,
     pub height: usize,
-    pub buffer: Vec<u32>,
+    pub visible: bool,
+    pub color: u32,
     pub title: &'static str,
+    pub buffer: &'static mut [u32], // framebuffer for window contents
 }
 
 // Global window list protected by a Mutex
-static WINDOWS: Mutex<RefCell<Vec<Window>>> = Mutex::new(RefCell::new(Vec::new()));
+pub static WINDOWS: Mutex<[Option<Window>; MAX_WINDOWS]> = Mutex::new({
+    let mut arr: [Option<Window>; MAX_WINDOWS] =
+        unsafe { core::mem::MaybeUninit::uninit().assume_init() };
+    let mut i = 0;
+    while i < MAX_WINDOWS {
+        arr[i] = None;
+        i += 1;
+    }
+    arr
+});
 
-// Basic UI events
-#[derive(Clone, Copy)]
-pub enum GuiEvent {
-    MouseClick { x: usize, y: usize },
-    MouseMove  { x: usize, y: usize },
-    KeyPress   { key: char },
+// Create a new window struct (without buffer)
+impl Window {
+    pub const fn new() -> Self {
+        Self {
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
+            visible: false,
+            color: 0x000000,
+            title: "",
+            buffer: &mut [], // empty slice; replace with actual buffer later
+        }
+    }
 }
 
 // Create a window
-pub fn create_window(x: usize, y: usize, width: usize, height: usize, color: u32, title: &'static str) {
+pub fn create_window(
+    x: usize,
+    y: usize,
+    width: usize,
+    height: usize,
+    color: u32,
+    title: &'static str,
+    buffer: &'static mut [u32],
+) {
     let window = Window {
-        x,
-        y,
-        width,
-        height,
-        buffer: alloc::vec![color; width * height],
+        x: x.try_into().unwrap(),
+        y: y.try_into().unwrap(),
+        width: width.try_into().unwrap(),
+        height: height.try_into().unwrap(),
+        visible: true,
+        color,
         title,
+        buffer,
     };
 
-    WINDOWS.lock().borrow_mut().push(window);
+    let mut wins = WINDOWS.lock();
+    for slot in wins.iter_mut() {
+        if slot.is_none() {
+            *slot = Some(window);
+            return;
+        }
+    }
+
+    panic!("Maximum number of windows reached");
 }
 
 // Handle incoming events
 pub fn handle_event(event: GuiEvent) {
-    let mut wins = WINDOWS.lock().borrow_mut();
-    for window in wins.iter_mut() {
-        match event {
-            GuiEvent::MouseClick { x, y } => {
-                if in_window(x, y, window) {
-                    draw_title_bar(window, 0x3333FF);
+    let (mouse_x, mouse_y) = poll_mouse_position();
+    let mut wins = WINDOWS.lock();
+    for window_opt in wins.iter_mut() {
+        if let Some(window) = window_opt {
+            match event {
+                GuiEvent::MouseClick { x, y } => {
+                    if in_window(x, y, window) {
+                        draw_title_bar(window, 0x3333FF);
+                    }
                 }
-            }
-            GuiEvent::MouseMove { x, y } => {
-                if in_window(x, y, window) {
-                    draw_border(window, 0x00FF00);
+                GuiEvent::MouseMove { x, y } => {
+                    if in_window(x, y, window) {
+                        draw_border(window, 0x00FF00);
+                    }
                 }
-            }
-            GuiEvent::KeyPress { key } => {
-                if key == 'c' {
-                    fill_window(window, 0x000000); // clear on key 'c'
+                GuiEvent::KeyPress { key } => {
+                    if key == 'c' {
+                        fill_window(window, 0x000000); // clear on key 'c'
+                    }
                 }
             }
         }
@@ -79,7 +121,22 @@ pub fn draw_window(window: &Window) {
     for y in 0..window.height {
         for x in 0..window.width {
             let color = window.buffer[y * window.width + x];
-            set_pixel(window.x + x, window.y + y, color);
+            set_pixel(window.x + x, window.y + y, color, 0);
+        }
+    }
+}
+
+// Redraw all windows
+pub fn render_windows() {
+    let (mouse_x, mouse_y) = poll_mouse_position();
+    let mut wins = WINDOWS.lock();
+    for window_opt in wins.iter_mut() {
+        if let Some(window) = window_opt {
+            if in_window(mouse_x, mouse_y, window) {
+                draw_title_bar(window, 0x3333FF);
+                draw_border(window, 0x00FF00);
+                fill_window(window, 0x000000);
+            }
         }
     }
 }
@@ -114,12 +171,14 @@ pub fn fill_window(window: &mut Window, color: u32) {
     }
 }
 
-// Redraw all windows
+// Redraw entire screen
 pub fn redraw_screen() {
-    clear_screen(0x000000);
-    let wins = WINDOWS.lock().borrow();
-    for w in wins.iter() {
-        draw_window(w);
+    clear_screen();
+    let wins = WINDOWS.lock();
+    for window_opt in wins.iter() {
+        if let Some(window) = window_opt {
+            draw_window(window);
+        }
     }
     commit_framebuffer();
 }
@@ -132,4 +191,12 @@ pub fn start_gui_loop() -> ! {
         }
         redraw_screen();
     }
+}
+
+// Dummy GuiEvent enum for completeness
+#[derive(Clone, Copy)]
+pub enum GuiEvent {
+    MouseClick { x: usize, y: usize },
+    MouseMove { x: usize, y: usize },
+    KeyPress { key: char },
 }

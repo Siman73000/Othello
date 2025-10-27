@@ -1,5 +1,5 @@
 OUTPUT_FORMAT(elf64-x86-64)
-ENTRY(kernel_main)
+ENTRY(kernel_entry)
 SECTIONS {
     . = 0x100000;
 

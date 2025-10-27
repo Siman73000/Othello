@@ -1,5 +1,3 @@
-#![no_main]
-#![no_std]
 
 const FRAMEBUFFER_BASE: usize = 0xA000_0000;
 const AUDIO_SAMPLE_RATE_REG: usize = 0x4000_0100;

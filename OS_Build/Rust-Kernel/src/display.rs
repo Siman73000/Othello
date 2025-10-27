@@ -1,8 +1,10 @@
-#![no_std]
-#![no_main]
 
-use core::panic::PanicInfo;
 use x86_64::instructions::port::{Port, PortWriteOnly};
+
+use crate::vga_driver::*;
+use crate::hdmi_driver::*;
+use crate::dp_driver::*;
+use crate::framebuffer_driver::*;
 
 const VIDEO_ADDRESS: u32 = 0xb8000;
 const MAX_ROWS: u32 = 25;
@@ -14,8 +16,6 @@ const REG_SCREEN_DATA: u16 = 0x3d5;
 const FRAMEBUFFER_BASE: usize = 0xA000_0000;
 
 static mut FRAMEBUFFER: Option<&mut [u8]> = None;
-
-// ======================= Framebuffer & Display Types ========================
 
 pub enum DisplayType {
     VGA,
@@ -38,15 +38,16 @@ pub fn _start() -> ! {
     let display_type = detect_display();
 
     match display_type {
-        DisplayType::VGA => vga_driver::init(),
-        DisplayType::Framebuffer => framebuffer_driver::init(),
-        DisplayType::HDMI => hdmi_driver::init(),
-        DisplayType::DisplayPort => dp_driver::init(),
+        DisplayType::VGA => vga_init(),
+        DisplayType::Framebuffer => init(),
+        DisplayType::HDMI => hdmi_init(),
+        DisplayType::DisplayPort => dp_init(),
         DisplayType::Unknown => panic!("Unknown display type."),
     }
 
     loop {}
 }
+
 
 fn detect_display() -> DisplayType {
     // query UEFI GOP or BIOS for framebuffer
@@ -71,7 +72,7 @@ fn query_framebuffer() -> Option<FrameBufferInfo> {
 fn query_pci_for_hdmi() -> bool {
     let mut hdmi_port = Port::new(0x3c0);
     unsafe {
-        hdmi_port.write(0x00);
+        hdmi_port.write(0u8);
         let status = hdmi_port.read();
         (status & 0x04) != 0
     }
@@ -80,7 +81,7 @@ fn query_pci_for_hdmi() -> bool {
 fn query_pci_for_vga() -> bool {
     let mut vga_port = Port::new(0x3c0);
     unsafe {
-        vga_port.write(0x00);
+        vga_port.write(0u8);
         let status = vga_port.read();
         (status & 0x01) != 0
     }
@@ -89,7 +90,7 @@ fn query_pci_for_vga() -> bool {
 fn query_pci_for_dp() -> bool {
     let mut dp_port = Port::new(0x3c0);
     unsafe {
-        dp_port.write(0x00);
+        dp_port.write(0u8);
         let status = dp_port.read();
         (status & 0x02) != 0
     }
@@ -99,8 +100,8 @@ fn query_pci_for_dp() -> bool {
 
 fn set_cursor(offset: u32) {
     let offset = offset / 2;
-    let mut screen_ctrl = PortWriteOnly::new(REG_SCREEN_CTRL);
-    let mut screen_data = PortWriteOnly::new(REG_SCREEN_DATA);
+    let mut screen_ctrl: PortWriteOnly<u8> = PortWriteOnly::new(REG_SCREEN_CTRL);
+    let mut screen_data: PortWriteOnly<u8> = PortWriteOnly::new(REG_SCREEN_DATA);
 
     unsafe {
         screen_ctrl.write(14);
@@ -111,8 +112,8 @@ fn set_cursor(offset: u32) {
 }
 
 fn get_cursor() -> u32 {
-    let mut screen_ctrl = Port::new(REG_SCREEN_CTRL);
-    let mut screen_data = Port::new(REG_SCREEN_DATA);
+    let mut screen_ctrl: Port<u8> = Port::new(REG_SCREEN_CTRL);
+    let mut screen_data: Port<u8> = Port::new(REG_SCREEN_DATA);
 
     let mut offset: u32;
     unsafe {

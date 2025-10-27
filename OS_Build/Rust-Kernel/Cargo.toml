@@ -4,10 +4,10 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-display = "0.1.2"
+linked_list_allocator = "0.10.5"
+spin = "0.10"
 mutex = "1.0.2"
 panic-halt = "1.0.0"
-spin = "0.10"
 
 x86_64 = { version = "0.15.2", default-features = false, features = ["instructions"] }
 
@@ -23,10 +23,5 @@ panic = "abort"
 
 # Build settings for bare-metal
 [build]
-target = "bare_metal.json"
-
-[target.'cfg(target_os = "none")']
-rustflags = [
-    "-C", "linker=ld",
-    "-C", "opt-level=2",
-]
+target = "x86_64-unknown-none"
+rustflags = ["-C", "linker=rust-lld"]

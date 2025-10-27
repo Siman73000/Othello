@@ -1,7 +1,4 @@
-#![no_std]
-#![no_main]
 
-use core::panic::PanicInfo;
 use core::ptr;
 use core::sync::atomic::{compiler_fence, Ordering};
 use x86_64::instructions::port::Port;
@@ -292,7 +289,7 @@ impl Rtl8139 {
         }
         Err(())
     }
-
+/*
     fn read_reg32(&self, reg: u16) -> u32 {
         unsafe { self.port32(reg).read() }
     }
@@ -300,7 +297,7 @@ impl Rtl8139 {
     fn write_reg32(&self, reg: u16, val: u32) {
         unsafe { self.port32(reg).write(val); }
     }
-
+*/
     pub fn poll_dequeue(&mut self) -> Option<&[u8]> {
         self.packet_queue.pop()
     }
