@@ -31,55 +31,53 @@
 ;   5       : DPL0-DPL1 | Descriptor Privilege Level (ring)
 ;   6       : Present | 1 = Seg is valid
 ;
-;
 section .data
+
 global gdt_descriptor
 
-extern DATA_SEG
-extern CODE_SEG
-align 8
+global CODE_SEG
+
+global DATA_SEG
+
+global CODE_SEG_64
+
+align 16
 gdt_start:
     dq 0x0                  ; Null descriptor
-    dq 0x00af9a000000ffff   ; Code seg 32bit base=0 limit=4GB
-    dq 0x00af92000000ffff   ; Data seg 64bit base=0 limit=4GB
 
 ; 32 bit code segment
 gdt_code:
-    dw 0xffff           ; Limit 16 bits low
-    dw 0x0              ; Base 16 bits low
-
-    db 0x0              ; Base next 8 bits
-    db 10011010b        ; Access code segment
-
-    db 11001111b        ; Granularity byte aka pain and suffering
-    db 0x0              ; Base 8 bits high
+    dw 0xffff               ; Limit 16 bits low
+    dw 0x0                  ; Base 16 bits low
+    db 0x0                  ; Base next 8 bits
+    db 10011010b            ; Access code segment
+    db 11001111b            ; Granularity byte (G=1, D/B=1, L=0)
+    db 0x0                  ; Base 8 bits high
 
 ; 32 bit data segment
 gdt_data:
-    dw 0xffff           ; Limit 16 bits low
-    dw 0x0              ; Base 16 bits low
-
-    db 0x0              ; Base next 8 bits
-    db 10010010b        ; Access data segment
-
-    db 11001111b        ; Granularity byte (oh not the consiquences of my own actions :o)
-    db 0x0              ; Base 8 bits high
+    dw 0xffff               ; Limit 16 bits low
+    dw 0x0                  ; Base 16 bits low
+    db 0x0                  ; Base next 8 bits
+    db 10010010b            ; Access data segment
+    db 11001111b            ; Granularity byte (G=1, D/B=1, L=0)
+    db 0x0                  ; Base 8 bits high
 
 ; 64 bit code segment
 gdt_code_64:
-    dw 0x0              ; Limit here is ignored in 64 bit mode
-    dw 0x0              ; Base 16 bits low
-    db 0x0              ; Base middle
-    db 10011010b        ; Access code segment (Code, Exe, Read)
-    db 11001111b        ; Granularity byte 64
-    db 0x0              ; Base 8 bits high
-    
+    dw 0x0                  ; Limit ignored in 64-bit mode
+    dw 0x0                  ; Base 16 bits low
+    db 0x0                  ; Base middle
+    db 10011010b            ; Access code segment (Code, Exe, Read)
+    db 00100000b            ; Long mode, D/B cleared to avoid 32-bit default
+    db 0x0                  ; Base 8 bits high
+
 gdt_end:
 
 gdt_descriptor:
     dw gdt_end - gdt_start - 1   ; Limit size of gdt
     dd gdt_start                 ; Base address of gdt
 
-CODE_SEG equ (gdt_code - gdt_start) * 8   ; Code segment selector
-DATA_SEG equ (gdt_data - gdt_start) * 8   ; Data segment selector
-CODE_SEG_64 equ (gdt_code_64 - gdt_start) * 8   ; 64 bit code segment selector
+CODE_SEG equ (gdt_code - gdt_start)      ; Code segment selector
+DATA_SEG equ (gdt_data - gdt_start)      ; Data segment selector
+CODE_SEG_64 equ (gdt_code_64 - gdt_start) ; 64 bit code segment selector

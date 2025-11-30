@@ -21,10 +21,11 @@ switchto64bit_stage2:
     or eax, 0x80000000      ; Enable paging (PG bit)
     mov cr0, eax
 
-    jmp 0x08:long_mode_entry  ; Far jump to 64-bit code
+    jmp CODE_SEG_64:long_mode_entry  ; Far jump to 64-bit code
 
 [bits 64]
 long_mode_entry:
+    cld                      ; Ensure string operations move forward
     mov ax, DATA_SEG         ; Load data segment selectors
 
     mov ds, ax
@@ -34,5 +35,6 @@ long_mode_entry:
     mov ss, ax
 
     mov rsp, 0x90000         ; Set stack pointer
+    and rsp, ~0xF            ; Maintain 16-byte alignment for ABI safety
 
     call BEGIN_64BIT         ; Jump to 64-bit kernel
