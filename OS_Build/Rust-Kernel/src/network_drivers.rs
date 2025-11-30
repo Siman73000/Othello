@@ -81,6 +81,7 @@ const TX_WAIT_LIMIT: usize = 200_000;
 const PCI_SCAN_TIMEOUT: usize = 1000;
 const WIFI_RECON_THRESHOLD: u32 = 4;
 const WIFI_HARD_DROP_THRESHOLD: u32 = 32;
+const NETWORK_POLL_WARMUP: usize = 256;
 
 /// static DMA buffers (must be physically contiguous and DMA-accessible)
 /// place in physical memory
@@ -882,6 +883,8 @@ impl Rtl8139 {
 }
 
 static mut GLOBAL_RTL: *mut Rtl8139 = ptr::null_mut();
+static mut RTL_INSTANCE: Option<Rtl8139> = None;
+static mut WIRELESS_CONTROLLER: Option<WirelessController> = None;
 
 #[no_mangle]
 pub extern "C" fn nic_irq_entry() {
@@ -894,7 +897,7 @@ pub extern "C" fn nic_irq_entry() {
 }
 
 #[no_mangle]
-pub extern "C" fn network_scan() -> ! {
+pub extern "C" fn network_scan() {
     let mut rtl: Option<Rtl8139> = None;
     let mut wireless: Option<WirelessController> = None;
 
@@ -921,36 +924,52 @@ pub extern "C" fn network_scan() -> ! {
         }
     });
 
-    if let Some(mut dev) = rtl {
+    if let Some(dev) = rtl {
         unsafe {
-            GLOBAL_RTL = &mut dev as *mut Rtl8139;
+            RTL_INSTANCE = Some(dev);
+            GLOBAL_RTL = RTL_INSTANCE
+                .as_mut()
+                .map(|driver| driver as *mut Rtl8139)
+                .unwrap_or(ptr::null_mut());
         }
-        loop {
-            if let Some(ctrl) = wireless.as_mut() {
-                ctrl.poll_wireless();
-            }
-            while let Some(pkt) = dev.poll_dequeue() {
-                if let Some((dst, src, ethertype)) = Rtl8139::parse_ethernet_frame(pkt) {
-                    let is_broadcast = dst == [0xffu8; 6];
-                    let is_for_me = dst == dev.mac;
-                    if is_broadcast || is_for_me {
-                        let _ = (dst, src, ethertype);
+    }
+
+    if let Some(ctrl) = wireless {
+        unsafe {
+            WIRELESS_CONTROLLER = Some(ctrl);
+        }
+    }
+
+    if unsafe { RTL_INSTANCE.is_some() || WIRELESS_CONTROLLER.is_some() } {
+        for _ in 0..NETWORK_POLL_WARMUP {
+            unsafe {
+                if let Some(ctrl) = WIRELESS_CONTROLLER.as_mut() {
+                    ctrl.poll_wireless();
+                }
+
+                if let Some(dev) = RTL_INSTANCE.as_mut() {
+                    while let Some(pkt) = dev.poll_dequeue() {
+                        if let Some((dst, src, ethertype)) =
+                            Rtl8139::parse_ethernet_frame(pkt)
+                        {
+                            let is_broadcast = dst == [0xffu8; 6];
+                            let is_for_me = dst == dev.mac;
+                            if is_broadcast || is_for_me {
+                                let _ = (dst, src, ethertype);
+                            }
+                        }
                     }
                 }
             }
+
             hlt();
         }
     }
 
-    if let Some(mut ctrl) = wireless {
-        loop {
-            ctrl.poll_wireless();
-            hlt();
+    unsafe {
+        if RTL_INSTANCE.is_none() {
+            GLOBAL_RTL = ptr::null_mut();
         }
-    }
-
-    loop {
-        hlt();
     }
 }
 

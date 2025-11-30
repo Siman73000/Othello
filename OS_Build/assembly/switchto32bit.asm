@@ -64,3 +64,19 @@ init_64bit:
     call BEGIN_64BIT        ; Call 64-bit entry point
 
     hlt                     ; Hang
+    jmp $
+
+section .bss
+align 4096
+pml4_table:
+    dq pdpt_table | 0x03
+
+align 4096
+pdpt_table:
+    dq pd_table | 0x03
+    times 511 dq 0
+
+align 4096
+pd_table:
+    dq 0x0000000000000083   ; 2MB identity mapping for lowest region
+    times 511 dq 0
