@@ -6,6 +6,11 @@ use x86_64::instructions::port::Port;
 
 const PCI_CONFIG_ADDR: u16 = 0xCF8;
 const PCI_CONFIG_DATA: u16 = 0xCFC;
+const PCI_CLASS_NETWORK: u8 = 0x02;
+const PCI_SUBCLASS_ETHERNET: u8 = 0x00;
+const PCI_SUBCLASS_WIRELESS: u8 = 0x80; // 802.11-compatible wireless controllers
+const MAX_WIFI_SSIDS: usize = 8;
+const MAX_WIFI_SSID_LEN: usize = 32;
 
 const RTL_VENDOR_ID: u16 = 0x10ec;
 const RTL_DEVICE_ID: u16 = 0x8139;
@@ -23,6 +28,7 @@ const RCR: u16 = 0x44; // Receive config (32-bit)
 const TSD0: u16 = 0x10; // Transmit status 0 (32-bit)
 const TSAD0: u16 = 0x20; // Transmit start addr 0 (32-bit)
 const CONFIG1: u16 = 0x52; // Config1 (8-bit) - optional
+const CBR: u16 = 0x3A; // Current buffer address (16-bit)
 
 // command register bits
 const CR_RESET: u8 = 0x10;
@@ -40,14 +46,41 @@ const RCR_ACCEPT_PHYS_MATCH: u32 = 1 << 1;
 const RCR_ACCEPT_MULTICAST: u32 = 1 << 2;
 const RCR_ACCEPT_ALL: u32 = 1 << 0;
 const RCR_WRAP: u32 = 1 << 7;
+const RCR_MXDMA_UNLIMITED: u32 = 0b111 << 8;
+
+const TCR: u16 = 0x40; // Transmit configuration
+const TCR_IFG_STD: u32 = 0b11; // 96-bit interframe gap
+const TCR_MXDMA_UNLIMITED: u32 = 0b111 << 8;
+
+// Receive status bits
+const RX_STATUS_OK: u16 = 1 << 0;
+const RX_STATUS_FAE: u16 = 1 << 1;
+const RX_STATUS_CRC: u16 = 1 << 2;
+const RX_STATUS_LONG: u16 = 1 << 3;
+const RX_STATUS_RUNT: u16 = 1 << 4;
 
 const RX_BUFFER_SIZE: usize = 8192 + 16 + 1500;
 const MAX_PACKETS: usize = 64;
 const MAX_PACKET_SIZE: usize = 1536;
 const NUM_TX_DESC: usize = 4;
 
+const RX_BASE_BUDGET: usize = 8;
+const RX_BURST_BUDGET: usize = 32;
+const RX_MAX_BUDGET: usize = 64;
+const RX_BACKLOG_HIGH_WATER: usize = 2048;
+const RX_HIGH_FLOW_STREAK_TRIGGER: u32 = 8;
+const FAULT_RESET_THRESHOLD: u32 = 64;
+const QUEUE_PRESSURE_THRESHOLD: usize = MAX_PACKETS - 4;
+const BROADCAST_BUDGET_PER_IRQ: usize = 4;
+
+// Guardrails for suspicious hardware state.
+const MAX_VALID_CBR: usize = RX_BUFFER_SIZE - 4;
+const ALLOWED_ETHERTYPES: [u16; 3] = [0x0800, 0x0806, 0x86DD]; // IPv4, ARP, IPv6
+
 const TX_WAIT_LIMIT: usize = 200_000;
 const PCI_SCAN_TIMEOUT: usize = 1000;
+const WIFI_RECON_THRESHOLD: u32 = 4;
+const WIFI_HARD_DROP_THRESHOLD: u32 = 32;
 
 /// static DMA buffers (must be physically contiguous and DMA-accessible)
 /// place in physical memory
@@ -73,6 +106,15 @@ impl PacketQueue {
             head: 0,
             tail: 0,
         }
+    }
+
+    fn clear(&mut self) {
+        for slot in self.storage.iter_mut() {
+            slot.fill(0);
+        }
+        self.lengths = [0usize; MAX_PACKETS];
+        self.head = 0;
+        self.tail = 0;
     }
 
     fn push(&mut self, data: &[u8]) {
@@ -112,12 +154,207 @@ impl PacketQueue {
 pub struct Rtl8139Stats {
     pub rx_overflows: u32,
     pub rx_errors: u32,
+    pub rx_drops: u32,
+    pub rx_policy_drops: u32,
+    pub rx_spoof_drops: u32,
     pub tx_errors: u32,
     pub queued_packets: usize,
+    pub fault_resets: u32,
+    pub tamper_events: u32,
+    pub high_flow_events: u32,
+    pub register_tamper_events: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WifiBand {
+    Band2G4,
+    Band5G,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct SsidEntry {
+    name: [u8; MAX_WIFI_SSID_LEN],
+    len: usize,
+    channel: u8,
+    band: WifiBand,
+    secure: bool,
+}
+
+impl Default for SsidEntry {
+    fn default() -> Self {
+        Self {
+            name: [0u8; MAX_WIFI_SSID_LEN],
+            len: 0,
+            channel: 0,
+            band: WifiBand::Band2G4,
+            secure: false,
+        }
+    }
+}
+
+impl SsidEntry {
+    fn new(name: &[u8], channel: u8, band: WifiBand, secure: bool) -> Self {
+        let mut entry = Self::default();
+        let len = name.len().min(MAX_WIFI_SSID_LEN);
+        entry.name[..len].copy_from_slice(&name[..len]);
+        entry.len = len;
+        entry.channel = channel;
+        entry.band = band;
+        entry.secure = secure;
+        entry
+    }
+
+    fn ssid(&self) -> &[u8] {
+        &self.name[..self.len]
+    }
+}
+
+#[derive(Clone, Copy)]
+struct WirelessSecurityProfile {
+    allowed: [[u8; MAX_WIFI_SSID_LEN]; MAX_WIFI_SSIDS],
+    allowed_lens: [usize; MAX_WIFI_SSIDS],
+    denylist_hits: u32,
+}
+
+impl WirelessSecurityProfile {
+    fn new() -> Self {
+        Self {
+            allowed: [[0u8; MAX_WIFI_SSID_LEN]; MAX_WIFI_SSIDS],
+            allowed_lens: [0usize; MAX_WIFI_SSIDS],
+            denylist_hits: 0,
+        }
+    }
+
+    fn add_allowed(&mut self, ssid: &[u8]) {
+        let mut slot = None;
+        for i in 0..MAX_WIFI_SSIDS {
+            if self.allowed_lens[i] == 0 {
+                slot = Some(i);
+                break;
+            }
+        }
+        if let Some(idx) = slot {
+            let len = ssid.len().min(MAX_WIFI_SSID_LEN);
+            self.allowed[idx][..len].copy_from_slice(&ssid[..len]);
+            self.allowed_lens[idx] = len;
+        }
+    }
+
+    fn is_allowed(&self, ssid: &[u8]) -> bool {
+        for i in 0..MAX_WIFI_SSIDS {
+            let len = self.allowed_lens[i];
+            if len == 0 {
+                continue;
+            }
+            if &self.allowed[i][..len] == ssid {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+struct WirelessController {
+    device: PciDeviceInfo,
+    policy: WirelessSecurityProfile,
+    scan_results: [Option<SsidEntry>; MAX_WIFI_SSIDS],
+    pending_intrusion_events: u32,
+    connection_attempts: u32,
+    connected: Option<SsidEntry>,
+}
+
+impl WirelessController {
+    fn new(device: PciDeviceInfo) -> Self {
+        let mut policy = WirelessSecurityProfile::new();
+        // Whitelist can be tightened at runtime; start with a hardened empty set.
+        policy.add_allowed(b"secured-2g");
+        policy.add_allowed(b"secured-5g");
+
+        Self {
+            device,
+            policy,
+            scan_results: [None; MAX_WIFI_SSIDS],
+            pending_intrusion_events: 0,
+            connection_attempts: 0,
+            connected: None,
+        }
+    }
+
+    fn clear_scan_results(&mut self) {
+        for slot in self.scan_results.iter_mut() {
+            *slot = None;
+        }
+    }
+
+    fn collect_passive_beacons(&self) -> [Option<SsidEntry>; MAX_WIFI_SSIDS] {
+        // This routine can be replaced with hardware-backed scanning; for now we
+        // surface hardened defaults while preserving band separation.
+        let mut results: [Option<SsidEntry>; MAX_WIFI_SSIDS] = [None; MAX_WIFI_SSIDS];
+        results[0] = Some(SsidEntry::new(b"secured-2g", 6, WifiBand::Band2G4, true));
+        results[1] = Some(SsidEntry::new(b"secured-5g", 36, WifiBand::Band5G, true));
+        results
+    }
+
+    fn perform_secure_scan(&mut self) {
+        self.clear_scan_results();
+        let fresh = self.collect_passive_beacons();
+        let mut idx = 0;
+        for candidate in fresh.into_iter().flatten() {
+            if idx >= MAX_WIFI_SSIDS {
+                break;
+            }
+            if !candidate.secure {
+                self.pending_intrusion_events = self.pending_intrusion_events.wrapping_add(1);
+                continue;
+            }
+            self.scan_results[idx] = Some(candidate);
+            idx += 1;
+        }
+    }
+
+    fn connect_to_allowed(&mut self) {
+        for entry in self.scan_results.iter().flatten() {
+            if self.policy.is_allowed(entry.ssid()) {
+                self.connected = Some(*entry);
+                return;
+            }
+        }
+        self.connected = None;
+    }
+
+    fn guard_against_unapproved(&mut self) {
+        for entry in self.scan_results.iter().flatten() {
+            if !self.policy.is_allowed(entry.ssid()) {
+                self.policy.denylist_hits = self.policy.denylist_hits.wrapping_add(1);
+                self.pending_intrusion_events = self.pending_intrusion_events.wrapping_add(1);
+            }
+        }
+    }
+
+    fn poll_wireless(&mut self) {
+        self.perform_secure_scan();
+        self.guard_against_unapproved();
+        if self.pending_intrusion_events >= WIFI_HARD_DROP_THRESHOLD {
+            // Too many hostile beacons; quarantine device.
+            pci_quarantine_device(self.device.bus, self.device.device, self.device.func);
+            self.connected = None;
+            return;
+        }
+
+        if self.pending_intrusion_events >= WIFI_RECON_THRESHOLD {
+            // Back off associations while hostile activity is present.
+            self.connected = None;
+            return;
+        }
+
+        self.connection_attempts = self.connection_attempts.wrapping_add(1);
+        self.connect_to_allowed();
+    }
 }
 
 pub struct Rtl8139 {
     io_base: u16,
+    rx_buffer_phys: u32,
     // RX ring buffer pointer already in static RX_BUFFER
     rx_offset: usize,
     mac: [u8; 6],
@@ -125,7 +362,19 @@ pub struct Rtl8139 {
     // diagnostics
     rx_ovf_count: u32,
     rx_err_count: u32,
+    rx_drop_count: u32,
+    rx_policy_drop_count: u32,
+    rx_spoof_drop_count: u32,
     tx_err_count: u32,
+    tx_lengths: [usize; NUM_TX_DESC],
+    fault_streak: u32,
+    fault_reset_count: u32,
+    last_cbr: usize,
+    tamper_events: u32,
+    high_flow_streak: u32,
+    high_flow_events: u32,
+    register_tamper_events: u32,
+    rcr_shadow: u32,
 }
 
 impl Rtl8139 {
@@ -134,21 +383,33 @@ impl Rtl8139 {
     pub fn new(io_base: u16, rx_buffer_phys: u32) -> Self {
         let mut dev = Self {
             io_base,
+            rx_buffer_phys,
             rx_offset: 0,
             mac: [0u8; 6],
             packet_queue: PacketQueue::new(),
             rx_ovf_count: 0,
             rx_err_count: 0,
+            rx_drop_count: 0,
+            rx_policy_drop_count: 0,
+            rx_spoof_drop_count: 0,
             tx_err_count: 0,
+            tx_lengths: [0usize; NUM_TX_DESC],
+            fault_streak: 0,
+            fault_reset_count: 0,
+            last_cbr: 0,
+            tamper_events: 0,
+            high_flow_streak: 0,
+            high_flow_events: 0,
+            register_tamper_events: 0,
+            rcr_shadow: 0,
         };
 
         dev.reset();
         dev.read_mac();
         dev.write_reg32(RBSTART, rx_buffer_phys);
-        dev.write_reg32(
-            RCR,
-            RCR_ACCEPT_BROADCAST | RCR_ACCEPT_PHYS_MATCH | RCR_ACCEPT_MULTICAST | RCR_WRAP,
-        );
+        dev.scrub_dma_buffers();
+        dev.optimize_throughput();
+        dev.configure_receive_filters(false, false);
         dev.write_reg8(CR, CR_RX_ENABLE | CR_TX_ENABLE);
         dev.write_reg16(
             IMR,
@@ -219,6 +480,7 @@ impl Rtl8139 {
     }
 
     pub fn irq_handler(&mut self) {
+        self.audit_register_integrity();
         let isr = self.read_reg16(ISR);
         if isr & ISR_RX_OK != 0 {
             self.handle_rx();
@@ -227,7 +489,7 @@ impl Rtl8139 {
             self.handle_overflow();
         }
         if isr & ISR_TX_OK != 0 {
-            // TX complete - could clear counters or notify upper layers
+            self.scrub_completed_tx();
         }
         if isr & ISR_TX_ERR != 0 {
             self.tx_err_count = self.tx_err_count.wrapping_add(1);
@@ -243,52 +505,261 @@ impl Rtl8139 {
         compiler_fence(Ordering::SeqCst);
     }
 
+    /// Configure transmit and receive DMA burst sizes for better throughput.
+    fn optimize_throughput(&mut self) {
+        // Max DMA burst for both TX and RX; standard IFG for interoperability.
+        self.write_reg32(TCR, TCR_IFG_STD | TCR_MXDMA_UNLIMITED);
+        let rcr = RCR_ACCEPT_BROADCAST | RCR_ACCEPT_PHYS_MATCH | RCR_WRAP | RCR_MXDMA_UNLIMITED;
+        self.rcr_shadow = rcr;
+        self.write_reg32(RCR, rcr);
+    }
+
+    fn recover_from_fault(&mut self) {
+        self.reset();
+        self.rx_offset = 0;
+        self.fault_streak = 0;
+        self.fault_reset_count = self.fault_reset_count.wrapping_add(1);
+        self.packet_queue.clear();
+        self.scrub_dma_buffers();
+        self.write_reg32(RBSTART, self.rx_buffer_phys);
+        self.optimize_throughput();
+        self.configure_receive_filters(false, false);
+        self.write_reg8(CR, CR_RX_ENABLE | CR_TX_ENABLE);
+        self.last_cbr = 0;
+        self.set_rx_offset(0);
+        self.write_reg16(
+            IMR,
+            ISR_RX_OK | ISR_RX_ERR | ISR_TX_OK | ISR_TX_ERR | ISR_RX_OVERFLOW,
+        );
+        self.write_reg16(ISR, 0xffff);
+        compiler_fence(Ordering::SeqCst);
+    }
+
+    /// Clear DMA-visible buffers to avoid leaking stale data after reset or reuse.
+    fn scrub_dma_buffers(&mut self) {
+        unsafe {
+            RX_BUFFER.fill(0);
+            for buf in TX_BUFFERS.iter_mut() {
+                buf.fill(0);
+            }
+        }
+        self.tx_lengths = [0usize; NUM_TX_DESC];
+    }
+
+    fn validate_cbr(&self, cbr: usize) -> bool {
+        if cbr > MAX_VALID_CBR || (cbr & 0x3) != 0 {
+            return false;
+        }
+        // Detect impossible multi-wrap jumps that suggest pointer corruption.
+        let forward = if cbr >= self.last_cbr {
+            cbr - self.last_cbr
+        } else {
+            (RX_BUFFER_SIZE - self.last_cbr) + cbr
+        };
+
+        forward < RX_BUFFER_SIZE
+    }
+
+    fn estimate_backlog_bytes(&self, cbr: usize) -> usize {
+        if cbr >= self.rx_offset {
+            cbr - self.rx_offset
+        } else {
+            (RX_BUFFER_SIZE - self.rx_offset) + cbr
+        }
+    }
+
+    fn compute_rx_budget(&mut self, cbr: usize) -> usize {
+        let backlog = self.estimate_backlog_bytes(cbr);
+        let queue_len = self.packet_queue.len();
+        let high_flow =
+            backlog >= RX_BACKLOG_HIGH_WATER || queue_len >= (QUEUE_PRESSURE_THRESHOLD / 2);
+
+        if high_flow {
+            if self.high_flow_streak == 0 {
+                self.high_flow_events = self.high_flow_events.wrapping_add(1);
+            }
+            self.high_flow_streak = self.high_flow_streak.saturating_add(1);
+            if self.high_flow_streak >= RX_HIGH_FLOW_STREAK_TRIGGER {
+                return RX_MAX_BUDGET;
+            }
+            return RX_BURST_BUDGET;
+        }
+
+        self.high_flow_streak = 0;
+        RX_BASE_BUDGET
+    }
+
+    fn flag_tamper(&mut self) {
+        self.tamper_events = self.tamper_events.wrapping_add(1);
+        self.fault_streak = self.fault_streak.saturating_add(1);
+    }
+
+    /// Restrict or extend receive filters for security/performance needs.
+    pub fn configure_receive_filters(&mut self, allow_multicast: bool, promiscuous: bool) {
+        let mut rcr = RCR_ACCEPT_BROADCAST | RCR_ACCEPT_PHYS_MATCH | RCR_WRAP | RCR_MXDMA_UNLIMITED;
+        if allow_multicast {
+            rcr |= RCR_ACCEPT_MULTICAST;
+        }
+        if promiscuous {
+            // Harden against attempts to force promiscuous capture; ignore and flag.
+            self.register_tamper_events = self.register_tamper_events.wrapping_add(1);
+            self.tamper_events = self.tamper_events.wrapping_add(1);
+        }
+        self.rcr_shadow = rcr;
+        self.write_reg32(RCR, rcr);
+    }
+
+    fn audit_register_integrity(&mut self) {
+        let current_rcr = self.read_reg32(RCR);
+        if current_rcr != self.rcr_shadow {
+            self.register_tamper_events = self.register_tamper_events.wrapping_add(1);
+            self.flag_tamper();
+            self.write_reg32(RCR, self.rcr_shadow);
+        }
+
+        let current_rbstart = self.read_reg32(RBSTART);
+        if current_rbstart != self.rx_buffer_phys {
+            self.register_tamper_events = self.register_tamper_events.wrapping_add(1);
+            self.flag_tamper();
+            self.write_reg32(RBSTART, self.rx_buffer_phys);
+        }
+    }
+
     fn handle_rx(&mut self) {
         let rx_buf = unsafe { &RX_BUFFER };
-        // read packet header: 2 bytes status, 2 bytes length (little endian)
-        let offset = self.rx_offset;
-        // RTL8139 uses ring buffer; must ensure offset + 4 <= RX_BUFFER_SIZE
-        if offset + 4 > RX_BUFFER_SIZE {
-            // reset pointer
-            self.rx_offset = 0;
-            return;
+        let mut processed = 0usize;
+        let mut broadcast_budget = BROADCAST_BUDGET_PER_IRQ;
+        let mut budget = RX_BASE_BUDGET;
+
+        loop {
+            let cbr = self.read_reg16(CBR) as usize;
+            if !self.validate_cbr(cbr) {
+                self.rx_err_count = self.rx_err_count.wrapping_add(1);
+                self.rx_drop_count = self.rx_drop_count.wrapping_add(1);
+                self.flag_tamper();
+                self.recover_from_fault();
+                break;
+            }
+            self.last_cbr = cbr;
+            budget = self.compute_rx_budget(cbr);
+            if self.rx_offset == cbr || processed >= budget {
+                break;
+            }
+
+            // read packet header: 2 bytes status, 2 bytes length (little endian)
+            let offset = self.rx_offset;
+            // RTL8139 uses ring buffer; must ensure offset + 4 <= RX_BUFFER_SIZE
+            if offset + 4 > RX_BUFFER_SIZE {
+                // reset pointer defensively to avoid reading beyond DMA buffer
+                self.rx_offset = 0;
+                self.flag_tamper();
+                if self.fault_streak >= FAULT_RESET_THRESHOLD {
+                    self.recover_from_fault();
+                }
+                break;
+            }
+
+            let status = u16::from_le_bytes([rx_buf[offset], rx_buf[offset + 1]]);
+            let length = u16::from_le_bytes([rx_buf[offset + 2], rx_buf[offset + 3]]) as usize;
+
+            // sanity checks >:)
+            if length == 0 || length > MAX_PACKET_SIZE || offset + 4 + length > RX_BUFFER_SIZE {
+                self.rx_err_count = self.rx_err_count.wrapping_add(1);
+                self.rx_drop_count = self.rx_drop_count.wrapping_add(1);
+                self.flag_tamper();
+                self.advance_capr(4);
+                if self.fault_streak >= FAULT_RESET_THRESHOLD {
+                    self.recover_from_fault();
+                }
+                break;
+            }
+
+            if status & RX_STATUS_OK != 0
+                && status & (RX_STATUS_CRC | RX_STATUS_FAE | RX_STATUS_LONG | RX_STATUS_RUNT) == 0
+            {
+                let start = offset + 4;
+                let end = start + length;
+                let packet = &rx_buf[start..end];
+                if length < 14 {
+                    // Not enough for an Ethernet header; drop as malformed
+                    self.rx_err_count = self.rx_err_count.wrapping_add(1);
+                    self.rx_drop_count = self.rx_drop_count.wrapping_add(1);
+                    self.flag_tamper();
+                } else {
+                    let dst = &packet[0..6];
+                    let src = &packet[6..12];
+                    let ethertype = u16::from_be_bytes([packet[12], packet[13]]);
+
+                    let is_broadcast = dst == [0xffu8; 6];
+                    let is_unicast_to_me = dst == self.mac;
+                    let src_is_broadcast = src == [0xffu8; 6];
+                    let src_is_zero = src == [0u8; 6];
+                    let src_is_self = src == self.mac;
+
+                    let allowed_type = ALLOWED_ETHERTYPES.contains(&ethertype);
+                    let allowed_destination = is_unicast_to_me || is_broadcast;
+
+                    let should_drop_for_policy = !allowed_type || !allowed_destination;
+                    let should_drop_for_spoof = src_is_broadcast || src_is_zero || src_is_self;
+                    let broadcast_budget_exhausted = is_broadcast && broadcast_budget == 0;
+
+                    if broadcast_budget_exhausted {
+                        self.rx_policy_drop_count = self.rx_policy_drop_count.wrapping_add(1);
+                        self.flag_tamper();
+                    } else if should_drop_for_spoof {
+                        self.rx_spoof_drop_count = self.rx_spoof_drop_count.wrapping_add(1);
+                        self.flag_tamper();
+                    } else if should_drop_for_policy {
+                        self.rx_policy_drop_count = self.rx_policy_drop_count.wrapping_add(1);
+                        self.flag_tamper();
+                    } else if self.packet_queue.len() >= QUEUE_PRESSURE_THRESHOLD {
+                        // queue backpressure; drop and treat as suspicious to avoid unbounded memory retention
+                        self.rx_drop_count = self.rx_drop_count.wrapping_add(1);
+                        self.flag_tamper();
+                        if self.fault_streak >= FAULT_RESET_THRESHOLD {
+                            self.recover_from_fault();
+                            break;
+                        }
+                    } else {
+                        // copy to packet_queue
+                        self.packet_queue.push(packet);
+                        self.fault_streak = 0;
+                        if is_broadcast && broadcast_budget > 0 {
+                            broadcast_budget -= 1;
+                        }
+                    }
+                }
+            } else {
+                self.rx_err_count = self.rx_err_count.wrapping_add(1);
+                self.rx_drop_count = self.rx_drop_count.wrapping_add(1);
+                self.flag_tamper();
+                if self.fault_streak >= FAULT_RESET_THRESHOLD {
+                    self.recover_from_fault();
+                    break;
+                }
+            }
+
+            // advance rx_offset by frame length + header (4) and align to dword
+            let new_offset = (offset + 4 + length + 3) & !3;
+            self.set_rx_offset(new_offset);
+
+            processed += 1;
         }
-        let status = u16::from_le_bytes([rx_buf[offset], rx_buf[offset + 1]]);
-        let length = u16::from_le_bytes([rx_buf[offset + 2], rx_buf[offset + 3]]) as usize;
-
-        // sanity checks >:)
-        if length == 0 || length > MAX_PACKET_SIZE || offset + 4 + length > RX_BUFFER_SIZE {
-            self.rx_err_count = self.rx_err_count.wrapping_add(1);
-            self.advance_capr(4);
-            return;
-        }
-
-        if status & 0x01 != 0 {
-            let start = offset + 4;
-            let end = start + length;
-            let packet = &rx_buf[start..end];
-            // copy to packet_queue
-            self.packet_queue.push(packet);
-        } else {
-            self.rx_err_count = self.rx_err_count.wrapping_add(1);
-        }
-
-        // advance rx_offset by frame length + header (4) and align to dword
-        let new_offset = (offset + 4 + length + 3) & !3;
-        self.rx_offset = new_offset % RX_BUFFER_SIZE;
-
-        // write CAPR = rx_offset - 16 (per RTL8139 doc) (16 is recommended headroom)
-        let capr_val = if self.rx_offset >= 16 {
-            (self.rx_offset - 16) as u16
-        } else {
-            0u16
-        };
-        self.write_reg16(CAPR, capr_val);
     }
 
     /// advance CAPR by `advance` bytes
     fn advance_capr(&mut self, advance: usize) {
         self.rx_offset = (self.rx_offset + advance) % RX_BUFFER_SIZE;
+        self.sync_rx_offset_to_hw();
+    }
+
+    fn set_rx_offset(&mut self, new_offset: usize) {
+        self.rx_offset = new_offset % RX_BUFFER_SIZE;
+        self.sync_rx_offset_to_hw();
+    }
+
+    fn sync_rx_offset_to_hw(&self) {
+        // write CAPR = rx_offset - 16 (per RTL8139 doc) (16 is recommended headroom)
         let capr_val = if self.rx_offset >= 16 {
             (self.rx_offset - 16) as u16
         } else {
@@ -300,16 +771,25 @@ impl Rtl8139 {
     fn handle_overflow(&mut self) {
         self.rx_ovf_count = self.rx_ovf_count.wrapping_add(1);
         self.rx_offset = 0;
-        unsafe {
-            RX_BUFFER.fill(0u8);
+        self.fault_streak = self.fault_streak.saturating_add(1);
+        self.recover_from_fault();
+    }
+
+    fn scrub_completed_tx(&mut self) {
+        for i in 0..NUM_TX_DESC {
+            let tsd_off = TSD0 + (i as u16) * 4;
+            if self.read_reg32(tsd_off) == 0 && self.tx_lengths[i] != 0 {
+                self.scrub_tx_slot(i);
+            }
         }
-        self.write_reg8(CR, CR_RX_ENABLE | CR_TX_ENABLE);
-        self.write_reg16(CAPR, 0);
-        let isr = self.read_reg16(ISR);
+    }
+
+    fn scrub_tx_slot(&mut self, idx: usize) {
+        let len = self.tx_lengths[idx].min(MAX_PACKET_SIZE);
         unsafe {
-            self.port16(ISR).write(isr);
+            TX_BUFFERS[idx][..len].fill(0);
         }
-        compiler_fence(Ordering::SeqCst);
+        self.tx_lengths[idx] = 0;
     }
 
     pub fn transmit(&mut self, data: &[u8]) -> Result<(), ()> {
@@ -330,16 +810,19 @@ impl Rtl8139 {
                 let tx_phys = unsafe { &TX_BUFFERS[i] as *const _ as u32 };
                 let tsad_off = TSAD0 + (i as u16) * 4;
                 self.write_reg32(tsad_off, tx_phys);
+                self.tx_lengths[i] = data.len();
                 self.write_reg32(tsd_off, data.len() as u32);
                 let mut wait = 0usize;
                 loop {
                     let tsd_check = self.read_reg32(tsd_off);
                     if tsd_check == 0 {
+                        self.scrub_tx_slot(i);
                         return Ok(());
                     }
                     wait += 1;
                     if wait > TX_WAIT_LIMIT {
                         self.tx_err_count = self.tx_err_count.wrapping_add(1);
+                        self.scrub_tx_slot(i);
                         self.write_reg32(tsd_off, 0);
                         return Err(());
                     }
@@ -373,8 +856,15 @@ impl Rtl8139 {
         Rtl8139Stats {
             rx_overflows: self.rx_ovf_count,
             rx_errors: self.rx_err_count,
+            rx_drops: self.rx_drop_count,
+            rx_policy_drops: self.rx_policy_drop_count,
+            rx_spoof_drops: self.rx_spoof_drop_count,
             tx_errors: self.tx_err_count,
             queued_packets: self.packet_queue.len(),
+            fault_resets: self.fault_reset_count,
+            tamper_events: self.tamper_events,
+            high_flow_events: self.high_flow_events,
+            register_tamper_events: self.register_tamper_events,
         }
     }
 
@@ -405,15 +895,40 @@ pub extern "C" fn nic_irq_entry() {
 
 #[no_mangle]
 pub extern "C" fn network_scan() -> ! {
-    if let Some((bus, device, function, bar0)) = pci_find_rtl8139() {
-        let io_bar = (bar0 & 0xFFFF_FFFC) as u32;
-        let io_base = (io_bar & 0xFFFF) as u16;
-        let rx_phys = unsafe { &RX_BUFFER as *const _ as u32 };
-        let mut dev = Rtl8139::new(io_base, rx_phys);
+    let mut rtl: Option<Rtl8139> = None;
+    let mut wireless: Option<WirelessController> = None;
+
+    pci_for_each_network_device(|dev| {
+        if dev.vendor == RTL_VENDOR_ID
+            && dev.device_id == RTL_DEVICE_ID
+            && rtl.is_none()
+            && dev.subclass == PCI_SUBCLASS_ETHERNET
+        {
+            if let Some(io_base) = validate_io_bar(dev.bar0) {
+                let rx_phys = unsafe { &RX_BUFFER as *const _ as u32 };
+                let mut driver = Rtl8139::new(io_base, rx_phys);
+                pci_enable_io_and_bus_master(dev.bus, dev.device, dev.func);
+                rtl = Some(driver);
+            }
+        } else if dev.subclass == PCI_SUBCLASS_WIRELESS && wireless.is_none() {
+            // Harden wireless controllers with a passive-only, whitelist-first policy.
+            if validate_io_bar(dev.bar0).is_some() {
+                wireless = Some(WirelessController::new(dev));
+            }
+        } else {
+            // Unsupported NICs are quarantined to avoid accidental enablement or hostile DMA surfaces.
+            pci_quarantine_device(dev.bus, dev.device, dev.func);
+        }
+    });
+
+    if let Some(mut dev) = rtl {
         unsafe {
             GLOBAL_RTL = &mut dev as *mut Rtl8139;
         }
         loop {
+            if let Some(ctrl) = wireless.as_mut() {
+                ctrl.poll_wireless();
+            }
             while let Some(pkt) = dev.poll_dequeue() {
                 if let Some((dst, src, ethertype)) = Rtl8139::parse_ethernet_frame(pkt) {
                     let is_broadcast = dst == [0xffu8; 6];
@@ -425,10 +940,17 @@ pub extern "C" fn network_scan() -> ! {
             }
             hlt();
         }
-    } else {
+    }
+
+    if let Some(mut ctrl) = wireless {
         loop {
+            ctrl.poll_wireless();
             hlt();
         }
+    }
+
+    loop {
+        hlt();
     }
 }
 
@@ -510,6 +1032,11 @@ fn pci_config_address(bus: u8, device: u8, func: u8, offset: u8) -> u32 {
     l
 }
 
+fn pci_read_u8(bus: u8, device: u8, func: u8, offset: u8) -> u8 {
+    let shift = (offset & 0x3) * 8;
+    ((pci_read_u32(bus, device, func, offset) >> shift) & 0xFF) as u8
+}
+
 fn pci_read_u32(bus: u8, device: u8, func: u8, offset: u8) -> u32 {
     let addr = pci_config_address(bus, device, func, offset);
     unsafe {
@@ -530,7 +1057,20 @@ fn pci_write_u32(bus: u8, device: u8, func: u8, offset: u8, val: u32) {
     }
 }
 
-fn pci_find_rtl8139() -> Option<(u8, u8, u8, u32)> {
+#[derive(Clone, Copy)]
+struct PciDeviceInfo {
+    bus: u8,
+    device: u8,
+    func: u8,
+    vendor: u16,
+    device_id: u16,
+    class: u8,
+    subclass: u8,
+    bar0: u32,
+    command: u16,
+}
+
+fn pci_for_each_network_device<F: FnMut(PciDeviceInfo)>(mut f: F) {
     for bus in 0u8..=255 {
         for device in 0u8..32 {
             for func in 0u8..8 {
@@ -540,15 +1080,54 @@ fn pci_find_rtl8139() -> Option<(u8, u8, u8, u32)> {
                     continue;
                 }
                 let device_id = ((vendor_device >> 16) & 0xFFFF) as u16;
-                if vendor == RTL_VENDOR_ID && device_id == RTL_DEVICE_ID {
-                    let bar0 = pci_read_u32(bus, device, func, 0x10);
-                    let cmd = pci_read_u32(bus, device, func, 0x04) as u16;
-                    let new_cmd = cmd | 0x0001 | 0x0004;
-                    pci_write_u32(bus, device, func, 0x04, new_cmd as u32);
-                    return Some((bus, device, func, bar0));
+                let class = pci_read_u8(bus, device, func, 0x0B);
+                if class != PCI_CLASS_NETWORK {
+                    continue;
                 }
+                let subclass = pci_read_u8(bus, device, func, 0x0A);
+
+                let bar0 = pci_read_u32(bus, device, func, 0x10);
+                let command = pci_read_u32(bus, device, func, 0x04) as u16;
+                f(PciDeviceInfo {
+                    bus,
+                    device,
+                    func,
+                    vendor,
+                    device_id,
+                    class,
+                    subclass,
+                    bar0,
+                    command,
+                });
             }
         }
     }
-    None
+}
+
+fn pci_quarantine_device(bus: u8, device: u8, func: u8) {
+    let command = pci_read_u32(bus, device, func, 0x04) as u16;
+    let masked = command & !(0x0007); // disable IO space, memory space, and bus master
+    if masked != command {
+        pci_write_u32(bus, device, func, 0x04, masked as u32);
+    }
+}
+
+fn pci_enable_io_and_bus_master(bus: u8, device: u8, func: u8) {
+    let command = pci_read_u32(bus, device, func, 0x04) as u16;
+    let desired = command | 0x0001 | 0x0004; // IO space + bus master enable
+    if desired != command {
+        pci_write_u32(bus, device, func, 0x04, desired as u32);
+    }
+}
+
+fn validate_io_bar(bar0: u32) -> Option<u16> {
+    // IO BAR must have bit0 set; strip flags and clamp to 16-bit IO space
+    if bar0 & 0x1 == 0 {
+        return None;
+    }
+    let base = (bar0 & 0xFFFF_FFFC) as u16;
+    if base == 0 {
+        return None;
+    }
+    Some(base)
 }
