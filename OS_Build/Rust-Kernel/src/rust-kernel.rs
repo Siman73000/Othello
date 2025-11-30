@@ -11,11 +11,12 @@ mod framebuffer_driver;
 
 use core::ptr;
 use vga_driver::vga_init;
-use hdmi_driver::hdmi_init;
-use dp_driver::dp_init;
+use hdmi_driver::{configure_from_firmware as configure_hdmi_from_firmware, hdmi_init, HdmiDescriptor, HdmiRegisters};
+use dp_driver::{configure_from_firmware as configure_dp_from_firmware, dp_init, DpDescriptor, DpRegisters};
 use network_drivers::network_scan;
 use crate::window::{create_window, start_gui_loop, Window};
 use core::mem::MaybeUninit;
+use crate::framebuffer_driver::{init_from_boot_info, BootFramebuffer};
 
 use linked_list_allocator::LockedHeap;
 
@@ -105,6 +106,46 @@ fn print_nl() {
     }
 }
 
+fn firmware_framebuffer_descriptor() -> BootFramebuffer {
+    BootFramebuffer {
+        base_addr: 0xA000_0000,
+        width: 1024,
+        height: 768,
+        pitch: 1024 * 4,
+        bytes_per_pixel: 4,
+    }
+}
+
+fn firmware_hdmi_descriptor() -> HdmiDescriptor {
+    HdmiDescriptor {
+        framebuffer_base: 0xA000_0000,
+        registers: HdmiRegisters {
+            clock_base: 0x4000_0200,
+            phy_base: 0x4000_0300,
+            audio_base: 0x4000_0100,
+            debug_base: 0x4000_0400,
+            hotplug_reg: 0x4000_0404,
+            pixel_format_reg: 0x4000_0410,
+        },
+        edid_block: None,
+    }
+}
+
+fn firmware_dp_descriptor() -> DpDescriptor {
+    DpDescriptor {
+        framebuffer_base: 0xA000_0000,
+        registers: DpRegisters {
+            clock_base: 0x4000_0500,
+            phy_base: 0x4000_0600,
+            audio_base: 0x4000_0100,
+            hotplug_reg: 0x4000_0640,
+            pixel_format_reg: 0x4000_0644,
+            debug_reg: 0x4000_0648,
+        },
+        edid_block: None,
+    }
+}
+
 // ======================= Panic Handler =======================
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
@@ -121,6 +162,11 @@ pub extern "C" fn kernel_main() -> ! {
     clear_screen();
     print_string("Kernel Booting...\n\n");
 
+    // Apply firmware-provided display descriptors
+    let _ = init_from_boot_info(firmware_framebuffer_descriptor());
+    configure_hdmi_from_firmware(firmware_hdmi_descriptor());
+    configure_dp_from_firmware(firmware_dp_descriptor());
+
     // Initialize drivers
     print_string("Initializing VGA driver...\n");
     vga_init();
@@ -135,8 +181,8 @@ pub extern "C" fn kernel_main() -> ! {
     print_string("Creating GUI Window...\n");
 
     unsafe {
-        create_window(20, 20, 200, 150, 0x888888, "System Monitor", &mut SYSTEM_MONITOR_BUFFER);
-        create_window(250, 80, 300, 200, 0x222222, "Network Console", &mut NETWORK_CONSOLE_BUFFER);
+        let _ = create_window(20, 20, 200, 150, 0x888888, "System Monitor", &mut SYSTEM_MONITOR_BUFFER);
+        let _ = create_window(250, 80, 300, 200, 0x222222, "Network Console", &mut NETWORK_CONSOLE_BUFFER);
     }
 
     // Start GUI loop

@@ -4,7 +4,8 @@ extern DATA_SEG
 extern BEGIN_64BIT
 
 [bits 32]
-switchto64bit:
+global switchto64bit_stage2
+switchto64bit_stage2:
     cli                     ; Disable interrupts
     lgdt [gdt_descriptor]   ; Load GDT descriptor
     mov eax, cr4
@@ -33,5 +34,5 @@ long_mode_entry:
     mov ss, ax
 
     mov rsp, 0x90000         ; Set stack pointer
-    
+
     call BEGIN_64BIT         ; Jump to 64-bit kernel

@@ -1,6 +1,5 @@
 extern print16
 extern print16_nl
-extern switchto32bit
 extern switchto64bit
 extern print32
 extern print64
@@ -10,6 +9,7 @@ extern disk_error
 extern sectors_error
 extern load_kernel_mbr
 extern load_kernel_gpt
+extern PARTITION_TYPE
 global BEGIN_32BIT
 global BEGIN_64BIT
 global start
@@ -32,17 +32,19 @@ start:
 
     call check_partition_table  ; Detect PT scheme
 
-    cmp byte [PARTITION_TYHPE], 0x01
+    cmp byte [PARTITION_TYPE], 0x01
     je load_mbr_kernel
     cmp byte [PARTITION_TYPE], 0x02
     je load_gpt_kernel
     jmp partition_error
 
 load_mbr_kernel:
+    mov dl, [BOOT_DRIVE]
     call load_kernel_mbr
     jmp continue_boot
 
 load_gpt_kernel:
+    mov dl, [BOOT_DRIVE]
     call load_kernel_gpt
     jmp continue_boot
 
@@ -58,7 +60,6 @@ load_kernel:
     ret
 
 continue_boot:
-    call switchto32bit
     call switchto64bit
     jmp $
 
@@ -72,9 +73,7 @@ partition_error:
 BEGIN_32BIT:
     mov ebx, MSG_32BIT_MODE
     call print32
-
-    call switchto64bit          ; Transition to 64-bit Long Mode
-    jmp $
+    ret
 
 [bits 64]   ; 64-bit Long Mode
 

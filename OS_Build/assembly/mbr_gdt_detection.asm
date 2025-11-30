@@ -10,8 +10,10 @@
 ;____________________________________________________________________________________
 
 section .data
+global PARTITION_TYPE
+PARTITION_TYPE db 0
 MBR_SIGNATURE dw 0xaa55
-GPT_SIGNATURE db "EFI PART" ; GPT Signature in 
+GPT_SIGNATURE db "EFI PART" ; GPT Signature in
 MBR_MSG db "MBR Detected", 0
 GPT_MSG db "GPT Detected", 0
 NO_PARTITION_MSG db "No Valid Partition Table Found", 0
@@ -42,7 +44,7 @@ check_partition_table:
 
     ; Load the 2nd sector (GPT header)
     mov bx, buffer
-    xor, ah, ah
+    xor ah, ah
     mov al, 1
     mov ch, 0
     mov cl, 2
@@ -60,16 +62,19 @@ check_partition_table:
 
     ; Basic print functions
 no_partition:
+    mov byte [PARTITION_TYPE], 0
     mov bx, NO_PARTITION_MSG
     call print
     ret
 
 is_mbr:
+    mov byte [PARTITION_TYPE], 1
     mov bx, MBR_MSG
     call print
     ret
 
 is_gpt:
+    mov byte [PARTITION_TYPE], 2
     mov bx, GPT_MSG
     call print
     ret
