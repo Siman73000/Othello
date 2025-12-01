@@ -103,7 +103,9 @@ long_mode_entry:
     and rsp, ~0xF               ; keep 16-byte alignment
 
     ; Jump into your 64-bit kernel entry point
-    call BEGIN_64BIT
+    mov rax, 0x0000000000100000   ; 1 MiB physical address
+    jmp rax
+
 
 .hang:
     hlt
