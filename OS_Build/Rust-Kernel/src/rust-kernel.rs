@@ -170,6 +170,73 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
 }
 
 // ======================= Kernel Entry =======================
+// Minimal C runtime shims for freestanding linking without libc.
+#[no_mangle]
+pub extern "C" fn memcpy(dest: *mut u8, src: *const u8, n: usize) -> *mut u8 {
+    unsafe {
+        for i in 0..n {
+            core::ptr::write(dest.add(i), core::ptr::read(src.add(i)));
+        }
+    }
+    dest
+}
+
+#[no_mangle]
+pub extern "C" fn memmove(dest: *mut u8, src: *const u8, n: usize) -> *mut u8 {
+    unsafe {
+        if dest as usize <= src as usize {
+            for i in 0..n {
+                core::ptr::write(dest.add(i), core::ptr::read(src.add(i)));
+            }
+        } else {
+            for i in (0..n).rev() {
+                core::ptr::write(dest.add(i), core::ptr::read(src.add(i)));
+            }
+        }
+    }
+    dest
+}
+
+#[no_mangle]
+pub extern "C" fn memset(dest: *mut u8, value: i32, n: usize) -> *mut u8 {
+    unsafe {
+        for i in 0..n {
+            core::ptr::write(dest.add(i), value as u8);
+        }
+    }
+    dest
+}
+
+#[no_mangle]
+pub extern "C" fn memcmp(a: *const u8, b: *const u8, n: usize) -> i32 {
+    for i in 0..n {
+        let lhs = unsafe { core::ptr::read(a.add(i)) };
+        let rhs = unsafe { core::ptr::read(b.add(i)) };
+        if lhs != rhs {
+            return lhs as i32 - rhs as i32;
+        }
+    }
+    0
+}
+
+#[no_mangle]
+pub extern "C" fn rust_eh_personality() {}
+
+#[no_mangle]
+pub extern "C" fn _Unwind_Resume() -> ! {
+    loop {
+        hlt();
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn _start() -> ! {
+    // Delegate to the real kernel entry. This satisfies linkers that require a
+    // concrete entry symbol when building the bare-metal image or when the host
+    // toolchain attempts to link a binary.
+    kernel_main()
+}
+
 #[no_mangle]
 pub extern "C" fn kernel_main() -> ! {
     // Initialize heap first
