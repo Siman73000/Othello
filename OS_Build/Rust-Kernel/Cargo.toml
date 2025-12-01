@@ -22,6 +22,3 @@ panic = "abort"
 panic = "abort"
 
 # Build settings for bare-metal
-[build]
-target = "x86_64-unknown-none"
-rustflags = ["-C", "linker=rust-lld"]
