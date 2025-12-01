@@ -12,7 +12,9 @@ The outline below shows one way to assemble, link, and wrap everything into a bo
 
 Install the toolchain components that match the sources:
 
-- Rust (stable) with `cargo`.
+- Rust **nightly** with `cargo`.
+- The `rust-src` component so `core`/`alloc` can be built for the custom target: `rustup component add rust-src --toolchain nightly`.
+- The LLVM binutils for `llvm-objcopy`: `rustup component add llvm-tools-preview --toolchain nightly && cargo +nightly install cargo-binutils` (or install a system `objcopy`).
 - `nasm` (assembler for the bootloader pieces).
 - `clang` or `gcc` that can emit freestanding 64-bit objects (`-ffreestanding -m64`).
 - `ld.lld` (or `ld`) and `objcopy` for producing flat binaries.
@@ -22,14 +24,15 @@ Install the toolchain components that match the sources:
 
 ```bash
 cd OS_Build/Rust-Kernel
-# Install the bare-metal target once
-rustup target add $(pwd)/bare_metal.json
 
-# Build a release kernel using the repository linker script
-cargo build --release
+# Build a release kernel using nightly and bundle core/alloc for the custom target
+# (no `rustup target add` is needed for JSON targets)
+cargo +nightly build \
+  -Zbuild-std=core,alloc,compiler_builtins \
+  --target bare_metal.json --release
 
-# Strip the ELF into a flat binary the bootloader can read
-objcopy -O binary target/bare_metal/release/rust-kernel ../build/kernel.bin
+# Strip the ELF into a flat binary the bootloader can read (llvm-objcopy also works)
+rust-objcopy -O binary target/bare_metal/release/rust-kernel ../build/kernel.bin
 cd -
 ```
 
