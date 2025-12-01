@@ -36,6 +36,17 @@ rust-objcopy -O binary target/bare_metal/release/rust-kernel ../build/kernel.bin
 cd -
 ```
 
+PowerShell does not recognize `\` as a line continuation character, so either run the build on one line or use backticks:
+
+```powershell
+cd OS_Build/Rust-Kernel
+cargo +nightly build `
+  -Zbuild-std=core,alloc,compiler_builtins `
+  --target bare_metal.json --release
+rust-objcopy -O binary target/bare_metal/release/rust-kernel ../build/kernel.bin
+cd -
+```
+
 The linker script at `OS_Build/Rust-Kernel/src/linker.ld` fixes the load address at `0x0010_0000` (1 MiB) and keeps the ELF sections in `.text`, `.rodata`, `.data`, and `.bss` contiguous.
 
 ## 2) Assemble the bootloader and mode switcher
