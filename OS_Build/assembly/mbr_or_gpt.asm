@@ -11,16 +11,20 @@ extern load_kernel_mbr
 extern load_kernel_gpt
 extern PARTITION_TYPE
 extern EXPECTED_KERNEL_SECTORS
+
 global BEGIN_32BIT
+global BOOT_DRIVE
 global BEGIN_64BIT
 global start
 global load_kernel
 
-KERNEL_OFFSET equ 0x1000
-KERNEL_BYTES  dd 0
+KERNEL_OFFSET   equ 0x1000
+KERNEL_BYTES    dd 0
 KERNEL_CHECKSUM dd 0
 
-; Start the bootloader process
+; ---------------------------------------------------------------------------
+; Stage-2 bootloader (not a 512-byte MBR)
+; ---------------------------------------------------------------------------
 
 [bits 16]   ; 16-bit Real Mode
 
@@ -44,13 +48,17 @@ start:
     call print16
     call print16_nl
 
-    call check_partition_table  ; Detect PT scheme
+    call check_partition_table   ; Detect PT scheme
 
     cmp byte [PARTITION_TYPE], 0x01
     je load_mbr_kernel
     cmp byte [PARTITION_TYPE], 0x02
     je load_gpt_kernel
     jmp partition_error
+
+; ---------------------------------------------------------------------------
+; Load kernel depending on partition scheme
+; ---------------------------------------------------------------------------
 
 load_mbr_kernel:
     mov bl, 0x01                    ; Expected partition type: MBR
@@ -71,6 +79,8 @@ load_gpt_kernel:
     mov word [KERNEL_BYTES], 64 * 512 ; Track bytes read for integrity checking
     mov dword [KERNEL_CHECKSUM], 0    ; Clear prior checksum before recomputation
     jmp continue_boot
+
+; Generic load path (e.g., legacy usage)
 
 load_kernel:
     mov bx, MSG_LOAD_KERNEL
@@ -96,6 +106,10 @@ continue_boot:
     hlt                          ; Halt if we ever return here unexpectedly
     jmp $
 
+; ---------------------------------------------------------------------------
+; Error path: unsupported / bad partition
+; ---------------------------------------------------------------------------
+
 partition_error:
     mov bx, MSG_PARTITION_ERROR
     call print16
@@ -103,12 +117,17 @@ partition_error:
     hlt
     jmp $
 
+; ---------------------------------------------------------------------------
+; Sanity checks before loading kernel
+; ---------------------------------------------------------------------------
+
 validate_kernel_load:
     push ax
     push bx
     push cx
     push dx
 
+    ; Validate boot drive
     mov al, [BOOT_DRIVE]
     test al, al
     jnz .drive_ok
@@ -119,6 +138,7 @@ validate_kernel_load:
     jmp $
 
 .drive_ok:
+    ; Ensure detected partition type matches expectation
     cmp byte [PARTITION_TYPE], bl
     je .partition_ok
     mov bx, MSG_PARTITION_MISMATCH
@@ -128,6 +148,7 @@ validate_kernel_load:
     jmp $
 
 .partition_ok:
+    ; Ensure kernel is loaded on a paragraph boundary
     mov ax, KERNEL_OFFSET
     test ax, 0x000F
     jz .aligned
@@ -138,6 +159,7 @@ validate_kernel_load:
     jmp $
 
 .aligned:
+    ; Check that kernel payload does not overlap stack region
     mov ax, cx
     shl ax, 9                         ; Convert sectors to bytes
     add ax, KERNEL_OFFSET
@@ -159,7 +181,11 @@ validate_kernel_load:
     pop ax
     ret
 
-[bits 32]   ; 32-bit Protected Mode
+; ---------------------------------------------------------------------------
+; 32-bit Protected Mode entry (called after GDT / CR0 setup elsewhere)
+; ---------------------------------------------------------------------------
+
+[bits 32]
 
 BEGIN_32BIT:
     pushad
@@ -186,7 +212,11 @@ BEGIN_32BIT:
     call print32
     ret
 
-[bits 64]   ; 64-bit Long Mode
+; ---------------------------------------------------------------------------
+; 64-bit Long Mode entry
+; ---------------------------------------------------------------------------
+
+[bits 64]
 
 BEGIN_64BIT:
     mov rbx, MSG_64BIT_MODE
@@ -198,6 +228,10 @@ BEGIN_64BIT:
     call rsi                    ; Call the 64-bit kernel entry point
     hlt                         ; Halt if kernel returns
     jmp $
+
+; ---------------------------------------------------------------------------
+; 64-bit kernel integrity verification
+; ---------------------------------------------------------------------------
 
 verify_kernel_integrity64:
     push rax
@@ -238,20 +272,18 @@ verify_kernel_integrity64:
     pop rax
     ret
 
-; Messages
+; ---------------------------------------------------------------------------
+; Messages / globals (stage-2 data)
+; ---------------------------------------------------------------------------
 
-BOOT_DRIVE db 0
-MSG_16BIT_MODE db "Started in 16-bit Real Mode", 0
-MSG_32BIT_MODE db "Landed in 32-bit Protected Mode", 0
-MSG_64BIT_MODE db "Entered 64-bit Long Mode", 0
-MSG_LOAD_KERNEL db "Loading kernel into memory", 0
-MSG_KERNEL_TAMPER db "Kernel integrity violation detected", 0
-MSG_BOOT_DRIVE_INVALID db "Boot drive missing or invalid", 0
-MSG_PARTITION_MISMATCH db "Partition scheme changed unexpectedly", 0
-MSG_KERNEL_ALIGNMENT_ERROR db "Kernel offset not aligned", 0
-MSG_KERNEL_RANGE_ERROR db "Kernel payload overlaps stack", 0
-
-; Boot sector padding and signature
-
-times 510 - ($-$$) db 0
-dw 0xaa55
+BOOT_DRIVE                    db 0
+MSG_16BIT_MODE                db "Started in 16-bit Real Mode", 0
+MSG_32BIT_MODE                db "Landed in 32-bit Protected Mode", 0
+MSG_64BIT_MODE                db "Entered 64-bit Long Mode", 0
+MSG_LOAD_KERNEL               db "Loading kernel into memory", 0
+MSG_KERNEL_TAMPER             db "Kernel integrity violation detected", 0
+MSG_BOOT_DRIVE_INVALID        db "Boot drive missing or invalid", 0
+MSG_PARTITION_MISMATCH        db "Partition scheme changed unexpectedly", 0
+MSG_KERNEL_ALIGNMENT_ERROR    db "Kernel offset not aligned", 0
+MSG_KERNEL_RANGE_ERROR        db "Kernel payload overlaps stack", 0
+MSG_PARTITION_ERROR           db "Unsupported or invalid partition layout", 0

@@ -2,7 +2,6 @@
 name = "Rust-Kernel"
 version = "0.1.0"
 edition = "2021"
-build = "build.rs"
 
 [dependencies]
 linked_list_allocator = "0.10.5"

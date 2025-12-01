@@ -1,108 +1,45 @@
-extern print16
+; disk.asm – simple BIOS disk helpers for stage-2 bootloader
+; Assembled as ELF32 but contains 16-bit real-mode code
+
+[bits 16]
+
 global disk_load
+extern check_partition_table
+global disk_error
+global sectors_error
 global load_kernel_mbr
 global load_kernel_gpt
+extern PARTITION_TYPE
 global EXPECTED_KERNEL_SECTORS
-%define KERNEL_OFFSET 0x1000
+
+extern print16
+extern print16_nl
+extern BOOT_DRIVE
+
+KERNEL_OFFSET    equ 0x1000       ; must match mbr_or_gpt.asm
 
 section .data
 
+;PARTITION_TYPE          db 0       ; 1 = MBR, 2 = GPT (for now we just set 1)
 EXPECTED_KERNEL_SECTORS db 0
+
+MSG_DISK_ERROR          db "Disk read error", 0
+MSG_SECTORS_ERROR       db "Sector count mismatch", 0
 
 section .text
 
 ; ---------------------------------------------------------------------------
-; disk_load
-; Inputs:
-;   DL: BIOS drive number
-;   CL: starting sector
-;   DH: sector count
-;   CH: cylinder (usually 0 for early boot)
-;   ES:BX: destination offset (set by caller)
-; Behavior:
-;   Reads DH sectors starting at CL from DL into ES:BX using BIOS int 0x13.
-;   Returns to the caller; on error, halts after printing a message.
+; check_partition_table
+;   For now: just assume an MBR-style layout.
+;   (You can later extend this to actually inspect a GPT protective MBR, etc.)
 ; ---------------------------------------------------------------------------
-disk_load:
-    pusha
-    cld                     ; Ensure predictable string direction for BIOS calls
+;check_partition_table:
+;    mov byte [PARTITION_TYPE], 1   ; 1 = MBR
+;    ret
 
-    ; Defensive parameter validation before touching disk
-    cmp dh, [EXPECTED_KERNEL_SECTORS]
-    jne sectors_error       ; Reject unexpected sector counts
-
-    cmp es, 0x0000
-    jne load_context_error  ; Kernel loads must target the zero segment
-
-    cmp bx, KERNEL_OFFSET
-    jne load_context_error  ; Prevent overwriting boot structures
-
-    test bx, 0x000F
-    jnz load_context_error  ; Require 16-byte alignment for DMA safety
-
-    test dh, dh             ; Validate sector count is non-zero
-    jz sectors_error
-
-    mov di, 3               ; Allow multiple retries for resilience
-
-    mov ah, 0x02            ; BIOS read sectors function
-    mov al, dh              ; Number of sectors to read (DH preserved in AL)
-    mov bl, al              ; Keep expected count in BL for later comparison
-
-    mov ch, 0x00            ; Cylinder 0
-    mov dh, 0x00            ; Head 0
-
-    ; es & bx reg point to 0x0000:0x1000 <- Phys Addr
-    mov ax, 0x0000
-    mov es, ax
-    ; BX should already contain the offset from the caller
-
-retry_read:
-    int 0x13                ; Call BIOS to load sectors
-    jc retry_or_fail_bios
-
-    ; Check if sectors were read correctly
-    cmp al, bl
-    je read_ok
-
-retry_or_fail_count:
-    dec di                  ; Consume a retry budget
-    jnz prepare_retry
-    jmp sectors_error       ; Exhausted retries with count mismatch
-
-retry_or_fail_bios:
-    dec di                  ; Consume a retry budget
-    jz disk_error           ; Give up after repeated BIOS failures
-
-prepare_retry:
-    mov ah, 0x00            ; Reset disk system before another attempt
-    int 0x13
-    jmp retry_read
-
-read_ok:
-    popa
-    ret
-
-load_kernel_mbr:
-    mov bx, MSG_LOAD_KERNEL_MBR
-    call print16
-    mov byte [EXPECTED_KERNEL_SECTORS], 32
-    mov bx, KERNEL_OFFSET
-    mov dh, 32
-    mov cl, 0x02
-    call disk_load
-    ret
-
-load_kernel_gpt:
-    mov bx, MSG_LOAD_KERNEL_GPT
-    call print16
-    mov byte [EXPECTED_KERNEL_SECTORS], 64
-    mov bx, KERNEL_OFFSET
-    mov dh, 64
-    mov cl, 0x03
-    call disk_load
-    ret
-
+; ---------------------------------------------------------------------------
+; disk_error  – print error and halt
+; ---------------------------------------------------------------------------
 disk_error:
     mov bx, MSG_DISK_ERROR
     call print16
@@ -110,6 +47,9 @@ disk_error:
     hlt
     jmp $
 
+; ---------------------------------------------------------------------------
+; sectors_error – print error and halt
+; ---------------------------------------------------------------------------
 sectors_error:
     mov bx, MSG_SECTORS_ERROR
     call print16
@@ -117,15 +57,116 @@ sectors_error:
     hlt
     jmp $
 
-load_context_error:
-    mov bx, MSG_LOAD_CONTEXT_ERROR
-    call print16
-    cli
-    hlt
-    jmp $
+; ---------------------------------------------------------------------------
+; disk_read_chs
+;   Low-level CHS read using BIOS int 13h
+;
+;   In:
+;     DL = drive
+;     ES:BX = destination
+;     CH = cylinder
+;     DH = head
+;     CL = starting sector (1-based)
+;     AL = sector count (1..)
+;
+;   Out:
+;     CF clear on success, set on error
+;   Trashes:
+;     AH
+; ---------------------------------------------------------------------------
+disk_read_chs:
+    push dx
+    push cx
+    push bx
+    push ax
 
-MSG_DISK_ERROR db "Disk read error!", 0
-MSG_LOAD_KERNEL_MBR db "Loading MBR kernel into memory...", 0
-MSG_LOAD_KERNEL_GPT db "Loading GPT kernel into memory...", 0
-MSG_SECTORS_ERROR db "Sector mismatch error!", 0
-MSG_LOAD_CONTEXT_ERROR db "Kernel load context rejected!", 0
+    mov ah, 0x02            ; BIOS read sectors
+    int 0x13
+    jc .fail
+
+    pop ax
+    pop bx
+    pop cx
+    pop dx
+    clc
+    ret
+
+.fail:
+    pop ax
+    pop bx
+    pop cx
+    pop dx
+    stc
+    ret
+
+; ---------------------------------------------------------------------------
+; load_kernel_mbr / load_kernel_gpt
+;
+; Calling convention (from mbr_or_gpt.asm):
+;   - DL = BOOT_DRIVE
+;   - EXPECTED_KERNEL_SECTORS already set
+;   - Kernel should be loaded at KERNEL_OFFSET in segment 0x0000
+;
+; For now, GPT and MBR follow the same loading strategy.
+; ---------------------------------------------------------------------------
+
+load_kernel_mbr:
+    jmp short load_kernel_common
+
+load_kernel_gpt:
+    jmp short load_kernel_common
+
+load_kernel_common:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+
+    ; ES = 0x0000, BX = KERNEL_OFFSET
+    xor ax, ax
+    mov es, ax
+    mov bx, KERNEL_OFFSET
+
+    movzx si, byte [EXPECTED_KERNEL_SECTORS] ; total sectors to read
+    mov ch, 0               ; cylinder 0
+    mov dh, 0               ; head 0
+    mov cl, 2               ; start at sector 2 (sector 1 is boot sector)
+
+.read_loop:
+    cmp si, 0
+    je .done
+
+    mov al, 1               ; read 1 sector at a time
+    call disk_read_chs
+    jc disk_error
+
+    add bx, 512             ; next destination address
+    inc cl                  ; next sector
+    dec si
+    jmp .read_loop
+
+.done:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; ---------------------------------------------------------------------------
+; disk_load
+;
+; Older path from mbr_or_gpt::load_kernel:
+;   mov bx, KERNEL_OFFSET
+;   mov edx, 32
+;   mov dl, [BOOT_DRIVE]
+;   call disk_load
+;
+; To keep things consistent, we ignore EDX and just use
+;   EXPECTED_KERNEL_SECTORS + BOOT_DRIVE and reuse load_kernel_mbr.
+; ---------------------------------------------------------------------------
+disk_load:
+    ; Ensure DL contains BOOT_DRIVE
+    mov dl, [BOOT_DRIVE]
+    jmp load_kernel_mbr

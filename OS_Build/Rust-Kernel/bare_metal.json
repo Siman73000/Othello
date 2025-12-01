@@ -5,14 +5,11 @@
   "arch": "x86_64",
   "os": "none",
   "executables": true,
-  "linker-flavor": "ld",
+  "linker-flavor": "ld.lld",
+  "linker": "rust-lld",
   "panic-strategy": "abort",
   "disable-redzone": true,
-  "features": "-mmx,-sse",
-  "eliminate-frame-pointer": false,
+  "features": "+sse,+sse2",
   "code-model": "kernel",
-  "data-layout": "e-m:e-i64:64-f80:128-n8:16:32:64-S128",
-  "pre-link-args": {
-    "ld": ["-T", "Rust-Kernel/src/linker.ld", "-nostdlib"]
-  }
+  "data-layout": "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
 }
