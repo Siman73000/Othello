@@ -1,5 +1,15 @@
 # Kernel build configuration for host platforms
 
+[build]
+# Always build against the bare-metal target so the linker script and
+# `-nostartfiles`/`-nodefaultlibs` flags are passed to an ld-style linker.
+target = "bare_metal.json"
+
+[target.bare_metal.json]
+# Use the LLVM ld-style linker (works on Windows and Unix hosts) so the
+# `-T` linker script argument emitted by build.rs is accepted.
+linker = "rust-lld"
+
 [target.x86_64-unknown-linux-gnu]
 linker = "cc"
 
