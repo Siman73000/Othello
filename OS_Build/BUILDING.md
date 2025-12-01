@@ -8,6 +8,56 @@ The repository is split into three major pieces under `OS_Build/`:
 
 The outline below shows one way to assemble, link, and wrap everything into a bootable ISO on a Linux host. The commands assume you start at the repository root.
 
+## Quick recipe: go from source to `build/othello.iso`
+
+If you want the shortest possible path to a bootable ISO and already have `nasm`, `ld.lld`, `rust-objcopy`, and `xorriso` installed, run the following from the repository root (Linux shell):
+
+```bash
+# 1) Build the Rust kernel as a flat binary
+cd OS_Build/Rust-Kernel
+cargo +nightly build -Zbuild-std=core,alloc,compiler_builtins --target bare_metal.json --release
+rust-objcopy -O binary target/bare_metal/release/rust-kernel ../build/kernel.bin
+
+# 2) Assemble + link the bootloader
+cd ../assembly
+mkdir -p ../build/boot
+for src in print16bit.asm print32.asm print64.asm disk.asm mbr_gdt_detection.asm mbr_or_gpt.asm switchto32bit.asm switchto64bit.asm kernelentry.asm; do
+  nasm -f elf64 "$src" -o "../build/boot/${src%.asm}.o"
+done
+ld.lld -nostdlib -Ttext 0x7c00 -o ../build/boot/bootloader.elf ../build/boot/*.o
+objcopy -O binary ../build/boot/bootloader.elf ../build/boot/bootloader.bin
+
+# 3) Stitch loader + kernel into a raw disk image (pads kernel to a full sector count)
+cd ..
+mkdir -p build
+cp build/boot/bootloader.bin build/othello.img
+python - <<'PY'
+from pathlib import Path
+kernel = Path('build/kernel.bin').read_bytes()
+sector = 512
+padded_len = ((len(kernel) + sector - 1) // sector) * sector
+kernel += b'\x00' * (padded_len - len(kernel))
+Path('build/kernel.pad').write_bytes(kernel)
+PY
+cat build/kernel.pad >> build/othello.img
+
+# 4) Wrap the raw image as an El Torito ISO
+mkdir -p build/isofiles/boot
+touch build/isofiles/boot/placeholder
+xorriso -as mkisofs \
+  -b boot/othello.img \
+  -no-emul-boot \
+  -boot-load-size 4 \
+  -boot-info-table \
+  -o build/othello.iso \
+  build
+
+# 5) (Optional) Test with QEMU
+qemu-system-x86_64 -cdrom build/othello.iso -boot d -m 512M
+```
+
+PowerShell-friendly equivalents for every step are listed in the detailed sections below if you are building on Windows.
+
 ## Prerequisites
 
 Install the toolchain components that match the sources:
@@ -69,6 +119,23 @@ objcopy -O binary ../build/boot/bootloader.elf ../build/boot/bootloader.bin
 cd -
 ```
 
+PowerShell equivalent:
+
+```powershell
+cd OS_Build/assembly
+mkdir -Force ../build/boot
+
+$srcs = 'print16bit.asm','print32.asm','print64.asm','disk.asm','mbr_gdt_detection.asm','mbr_or_gpt.asm','switchto32bit.asm','switchto64bit.asm','kernelentry.asm'
+foreach ($src in $srcs) {
+  $out = "../build/boot/" + ($src -replace '\\.asm$','.o')
+  nasm -f elf64 $src -o $out
+}
+
+ld.lld -nostdlib -Ttext 0x7c00 -o ../build/boot/bootloader.elf ../build/boot/*.o
+objcopy -O binary ../build/boot/bootloader.elf ../build/boot/bootloader.bin
+cd -
+```
+
 > **Note:** `mbr_or_gpt.asm` currently reserves space for the `0xAA55` boot signature and expects to fit in the first 512 bytes. If you add code and the object grows beyond a single sector, trim the new logic or move it into a second-stage loader that you read after the initial sector.
 
 ## 3) Build the C helpers (optional)
@@ -110,6 +177,20 @@ cat build/kernel.pad >> build/othello.img
 cd -
 ```
 
+PowerShell equivalent (uses `python -c` instead of a here-doc):
+
+```powershell
+cd OS_Build
+mkdir -Force build
+
+cp build/boot/bootloader.bin build/othello.img
+
+python -c "from pathlib import Path; data=Path('build/kernel.bin').read_bytes(); sector=512; padded=((len(data)+sector-1)//sector)*sector; Path('build/kernel.pad').write_bytes(data + b'\x00'*(padded-len(data)))"
+
+cat build/kernel.pad >> build/othello.img
+cd -
+```
+
 ## 5) Wrap as an ISO image
 
 Use `xorriso` (or `mkisofs`) to expose the raw disk image as an El Torito boot image. BIOSes will execute the first sector (`0xAA55` signature) and the loader will pull in the kernel sectors you appended.
@@ -128,10 +209,40 @@ xorriso -as mkisofs \
 cd -
 ```
 
+PowerShell equivalent (if `xorriso` is available):
+
+```powershell
+cd OS_Build
+mkdir -Force build/isofiles/boot
+New-Item -ItemType File -Path build/isofiles/boot/placeholder -Force | Out-Null
+xorriso -as mkisofs `
+  -b boot/othello.img `
+  -no-emul-boot `
+  -boot-load-size 4 `
+  -boot-info-table `
+  -o build/othello.iso `
+  build
+cd -
+```
+
 You can then boot-test with QEMU:
 
 ```bash
 qemu-system-x86_64 -cdrom OS_Build/build/othello.iso -boot d -m 512M
 ```
+
+PowerShell equivalent:
+
+```powershell
+qemu-system-x86_64 -cdrom OS_Build/build/othello.iso -boot d -m 512M
+```
+
+## Windows prerequisites
+
+If you are building from PowerShell, the GNU/LLVM utilities used above are not available by default. Install them via a package manager before running the commands:
+
+- `nasm`, `llvm`/`lld`, and `qemu` are available from Chocolatey: `choco install nasm llvm qemu`.
+- `xorriso` can be installed from Chocolatey (`choco install xorriso`) or via WSL if you prefer to run the ISO step from a Linux environment.
+- The Rust toolchain steps are the same as above: `rustup toolchain install nightly`, `rustup component add rust-src --toolchain nightly`, and `rustup component add llvm-tools-preview --toolchain nightly && cargo +nightly install cargo-binutils`.
 
 That end-to-end flow assembles the bootloader, links in the Rust kernel (plus optional C helpers), stitches them together into a raw disk image, and wraps the result into an ISO that a PC firmware can boot.
