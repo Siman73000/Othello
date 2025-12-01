@@ -7,6 +7,7 @@ mod vga_driver;
 mod dp_driver;
 mod hdmi_driver;
 mod window;
+mod security;
 mod framebuffer_driver;
 
 use core::ptr;
@@ -17,13 +18,26 @@ use network_drivers::network_scan;
 use crate::window::{create_window, start_gui_loop, Window};
 use core::mem::MaybeUninit;
 use crate::framebuffer_driver::{init_from_boot_info, BootFramebuffer};
+use crate::security::initialize_security;
+use core::sync::atomic::{AtomicBool, Ordering};
+use x86_64::instructions::hlt;
 
 use linked_list_allocator::LockedHeap;
 
 #[global_allocator]
 static ALLOCATOR: LockedHeap = LockedHeap::empty();
 
+static HEAP_INITIALIZED: AtomicBool = AtomicBool::new(false);
+
 pub fn init_heap(heap_start: usize, heap_size: usize) {
+    if HEAP_INITIALIZED
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        // Already initialized; avoid a second mutable borrow of the heap region.
+        return;
+    }
+
     unsafe { ALLOCATOR.lock().init(heap_start as *mut u8, heap_size) }
 }
 
@@ -41,6 +55,7 @@ const HEAP_SIZE: usize = 1024 * 1024; // 1 MB heap
 // Static framebuffers for GUI windows
 static mut SYSTEM_MONITOR_BUFFER: [u32; 200 * 150] = [0; 200 * 150];
 static mut NETWORK_CONSOLE_BUFFER: [u32; 300 * 200] = [0; 300 * 200];
+static mut SHELL_BUFFER: [u32; 360 * 220] = [0; 360 * 220];
 
 #[repr(u8)]
 enum VgaColor {
@@ -149,14 +164,86 @@ fn firmware_dp_descriptor() -> DpDescriptor {
 // ======================= Panic Handler =======================
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
-    loop {}
+    loop {
+        hlt();
+    }
 }
 
 // ======================= Kernel Entry =======================
+// Minimal C runtime shims for freestanding linking without libc.
+#[no_mangle]
+pub extern "C" fn memcpy(dest: *mut u8, src: *const u8, n: usize) -> *mut u8 {
+    unsafe {
+        for i in 0..n {
+            core::ptr::write(dest.add(i), core::ptr::read(src.add(i)));
+        }
+    }
+    dest
+}
+
+#[no_mangle]
+pub extern "C" fn memmove(dest: *mut u8, src: *const u8, n: usize) -> *mut u8 {
+    unsafe {
+        if dest as usize <= src as usize {
+            for i in 0..n {
+                core::ptr::write(dest.add(i), core::ptr::read(src.add(i)));
+            }
+        } else {
+            for i in (0..n).rev() {
+                core::ptr::write(dest.add(i), core::ptr::read(src.add(i)));
+            }
+        }
+    }
+    dest
+}
+
+#[no_mangle]
+pub extern "C" fn memset(dest: *mut u8, value: i32, n: usize) -> *mut u8 {
+    unsafe {
+        for i in 0..n {
+            core::ptr::write(dest.add(i), value as u8);
+        }
+    }
+    dest
+}
+
+#[no_mangle]
+pub extern "C" fn memcmp(a: *const u8, b: *const u8, n: usize) -> i32 {
+    for i in 0..n {
+        let lhs = unsafe { core::ptr::read(a.add(i)) };
+        let rhs = unsafe { core::ptr::read(b.add(i)) };
+        if lhs != rhs {
+            return lhs as i32 - rhs as i32;
+        }
+    }
+    0
+}
+
+#[no_mangle]
+pub extern "C" fn rust_eh_personality() {}
+
+#[no_mangle]
+pub extern "C" fn _Unwind_Resume() -> ! {
+    loop {
+        hlt();
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn _start() -> ! {
+    // Delegate to the real kernel entry. This satisfies linkers that require a
+    // concrete entry symbol when building the bare-metal image or when the host
+    // toolchain attempts to link a binary.
+    kernel_main()
+}
+
 #[no_mangle]
 pub extern "C" fn kernel_main() -> ! {
     // Initialize heap first
     init_heap(HEAP_START, HEAP_SIZE);
+
+    // Reset security/registry state so we never boot with stale secrets.
+    initialize_security();
 
     // Clear VGA screen
     clear_screen();
@@ -181,8 +268,20 @@ pub extern "C" fn kernel_main() -> ! {
     print_string("Creating GUI Window...\n");
 
     unsafe {
-        let _ = create_window(20, 20, 200, 150, 0x888888, "System Monitor", &mut SYSTEM_MONITOR_BUFFER);
-        let _ = create_window(250, 80, 300, 200, 0x222222, "Network Console", &mut NETWORK_CONSOLE_BUFFER);
+        let monitor = create_window(24, 24, 260, 180, 0x10131f, "System Monitor", &mut SYSTEM_MONITOR_BUFFER);
+        if let Ok(id) = monitor {
+            window::paint_system_monitor(id);
+        }
+
+        let net = create_window(320, 48, 300, 200, 0x0f172a, "Network Console", &mut NETWORK_CONSOLE_BUFFER);
+        if let Ok(id) = net {
+            window::paint_network_console(id);
+        }
+
+        let shell = create_window(120, 240, 360, 220, 0x0b1220, "Othello Shell", &mut SHELL_BUFFER);
+        if let Ok(id) = shell {
+            window::paint_shell(id);
+        }
     }
 
     // Start GUI loop
