@@ -1,5 +1,5 @@
 [build]
-target = "bare_metal.json"
+target = "x86_64-unknown-none"
 
 [target.bare_metal]
 rustflags = [
@@ -11,3 +11,8 @@ rustflags = [
 
 [target.x86_64-pc-windows-msvc]
 # linker = "link.exe"
+
+[target.x86_64-unknown-none]
+rustflags = [
+    "-C", "link-arg=-Tlinker.ld",
+]
