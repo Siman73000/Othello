@@ -1,5 +1,5 @@
 <h1 align="center">
-  <img src="Frame 1.jpg"
+  <img src="Frame 1.png"
        alt="Othello OS icon"
        width="32"
        height="32">
