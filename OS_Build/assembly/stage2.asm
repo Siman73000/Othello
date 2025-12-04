@@ -11,8 +11,8 @@
 ; Disk / layout parameters
 ; -------------------------------
 
-STAGE2_SECTORS    equ 32                      ; sectors reserved for stage2 (must match stage1)
-KERNEL_LBA_START  equ 1 + STAGE2_SECTORS    ; kernel starts right after stage2 (LBA 9)
+STAGE2_SECTORS    equ 8                      ; sectors reserved for stage2 (must match stage1)
+KERNEL_LBA_START  equ 1 + STAGE2_SECTORS
 
 ; How many sectors of kernel to read (can safely overshoot a bit)
 ; 128 * 512 = 64 KiB. Keep your kernel.bin <= 64 KiB for now.

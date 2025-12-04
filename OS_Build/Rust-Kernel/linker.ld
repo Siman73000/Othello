@@ -1,34 +1,32 @@
 OUTPUT_FORMAT(elf64-x86-64)
-ENTRY(kernel_entry)
-SECTIONS {
-    /* Link address must match KERNEL_LOAD_PHYS in stage2.asm */
-    . = 0x00020000;
+OUTPUT_ARCH(i386:x86-64)
+ENTRY(_start)
 
-    .text :
+SECTIONS
+{
+    /* Physical / virtual address where the kernel is loaded. */
+    . = 0x0000000000020000;
+
+    .text : ALIGN(4K)
     {
-        *(.text._start)      /* make sure _start is at the beginning */
+        KEEP(*(.text._start))   /* our Rust entrypoint */
+        KEEP(*(.text.boot))
         *(.text*)
     }
 
-    .rodata : ALIGN(4096)
+    .rodata : ALIGN(4K)
     {
         *(.rodata*)
     }
 
-    .data : ALIGN(4096)
+    .data : ALIGN(4K)
     {
         *(.data*)
     }
 
-    .bss : ALIGN(4096)
+    .bss : ALIGN(4K)
     {
         *(.bss*)
         *(COMMON)
-    }
-
-    /DISCARD/ :
-    {
-        *(.eh_frame*)
-        *(.comment*)
     }
 }

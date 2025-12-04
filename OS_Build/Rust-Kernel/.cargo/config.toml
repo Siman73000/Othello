@@ -13,6 +13,8 @@ rustflags = [
 # linker = "link.exe"
 
 [target.x86_64-unknown-none]
+linker = "rust-lld"
 rustflags = [
-    "-C", "link-arg=-Tlinker.ld",
+  "-C", "link-arg=-Tlinker.ld",
+  "-C", "relocation-model=static",
 ]

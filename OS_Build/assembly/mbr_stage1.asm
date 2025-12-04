@@ -8,7 +8,7 @@
 ; Where to load stage 2 (must match [org 0x8000] in stage2.asm)
 STAGE2_LOAD_SEG equ 0x0000           ; segment
 STAGE2_LOAD_OFF equ 0x8000           ; offset -> physical 0x0000:0x8000
-STAGE2_SECTORS  equ 32                ; number of sectors occupied by stage2
+STAGE2_SECTORS  equ 8                ; number of sectors occupied by stage2
 
 start:
     cli

@@ -26,13 +26,12 @@ $profile      = if ($Debug) { "debug" } else { "release" }
 
 $kernelElf = Join-Path $kernelRoot "target\$targetTriple\$profile\rust-kernel"
 $kernelBin = Join-Path $buildDir   "kernel.bin"
-
 $mbrAsm    = Join-Path $osBuildRoot "assembly\mbr_stage1.asm"
 $stage2Asm = Join-Path $osBuildRoot "assembly\stage2.asm"
 
 $mbrBin    = Join-Path $bootDir "mbr_stage1.bin"
 $stage2Bin = Join-Path $bootDir "stage2.bin"
-
+(Get-Item $stage2Bin).Length
 $diskImg   = Join-Path $buildDir "disk.img"
 $diskSizeMiB = 64
 
@@ -143,6 +142,14 @@ if ($stage2Data.Length % $sectorSize -ne 0) {
 
 Write-Host "    Stage2 size: $($stage2Data.Length) bytes ($stage2SectorsActual sectors)"
 Write-Host ""
+
+Write-Host "==> Verifying sizes..."
+(Get-Item $kernelBin).Length
+Write-Host "Kernel size: $([Math]::Ceiling((Get-Item $kernelBin).Length / $sectorSize)) sectors"
+Write-Host "Stage2 bin size: "
+(Get-Item $stage2Bin).Length
+# and see the "Stage2 size: ... bytes (...) sectors" output from the script
+
 
 # ------------------------------------------------------------------------------------
 # 4. Build disk image: [MBR][Stage2][Kernel]
