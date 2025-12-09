@@ -15,8 +15,7 @@ STAGE2_SECTORS    equ 8                      ; sectors reserved for stage2 (must
 KERNEL_LBA_START  equ 1 + STAGE2_SECTORS
 
 ; How many sectors of kernel to read (can safely overshoot a bit)
-; 128 * 512 = 64 KiB. Keep your kernel.bin <= 64 KiB for now.
-KERNEL_SECTORS    equ 128
+KERNEL_SECTORS    equ 128                    ; 128 * 512 = 64 KiB
 
 ; Kernel load location (physical)
 KERNEL_LOAD_SEG   equ 0x2000                ; 0x2000:0x0000 = 0x0002_0000
@@ -45,6 +44,10 @@ stage2_entry:
     mov sp, 0x7C00              ; simple temporary 16-bit stack below us
 
     mov [boot_drive], dl        ; preserve BIOS boot drive for INT 13h
+
+    ; switch to 320x200x256 (Mode 13h) for the framebuffer at 0xA0000
+    call set_vga_mode13
+
     sti
 
     ; Banner so we know stage2 actually ran
@@ -182,6 +185,12 @@ print_hex_nibble:
     int 0x10
     ret
 
+; Set VGA Mode 13h (320x200x256)
+set_vga_mode13:
+    mov ax, 0x0013
+    int 0x10
+    ret
+
 ; ------------------------------------------------
 ; 32-bit protected-mode entry
 ; ------------------------------------------------
@@ -306,9 +315,9 @@ long_mode_entry:
     ; 64-bit stack
     mov rsp, 0x0009FF00
 
-    ; Debug: print "LM64" so we know long mode works
+    ; Debug: print "LM64" so we know long mode works (text mode still active)
     mov rdi, 0x00000000000B8000
-    mov ax, 0x0F4C         ; 'L' white on black
+    mov ax, 0x0F4C         ; 'L'
     mov [rdi], ax
     mov ax, 0x0F4D         ; 'M'
     mov [rdi+2], ax
@@ -317,11 +326,10 @@ long_mode_entry:
     mov ax, 0x0F34         ; '4'
     mov [rdi+6], ax
 
-    ; Optionally clear RDI so we don't accidentally pass a bogus arg
     xor rdi, rdi
 
-    ; === Jump to kernel entry at 1 MiB ===
-    mov rax, 0x0000000000020000      ; must match your kernel load address
+    ; Jump to kernel entry at 0x0002_0000 (must match linker + loader)
+    mov rax, 0x0000000000020000
     jmp rax
 
 .hang:
@@ -334,14 +342,6 @@ long_mode_entry:
 
 [bits 16]
 
-; 16-byte Disk Address Packet for INT 13h extensions (AH = 42h)
-;  0: size (10h)
-;  1: reserved
-;  2: sector_count
-;  4: buf_off
-;  6: buf_seg
-;  8: lba_low  (dword)
-; 12: lba_high (dword)
 dap:
 .size          db 16
 .reserved      db 0
@@ -363,31 +363,17 @@ msg_load_fail   db ")",13,10,"Kernel load failed - halting.",13,10,0
 ; ------------------------------------------------
 ; Global Descriptor Table
 ; ------------------------------------------------
-; Five descriptors (8 bytes each):
-;  0: null
-;  1: 32-bit code
-;  2: 32-bit data
-;  3: 64-bit code
-;  4: 64-bit data
 
 align 8
 gdt_start:
-    dq 0x0000000000000000          ; null descriptor
-
-    ; 32-bit code: base=0, limit=4 GiB, type=0x9A, flags=0xCF
-    dq 0x00CF9A000000FFFF
-
-    ; 32-bit data: base=0, limit=4 GiB, type=0x92, flags=0xCF
-    dq 0x00CF92000000FFFF
-
-    ; 64-bit code: base=0, limit=4 GiB, type=0x9A, flags=0xAF (L=1)
-    dq 0x00AF9A000000FFFF
-
-    ; 64-bit data: base=0, limit=4 GiB, type=0x92, flags=0xAF
-    dq 0x00AF92000000FFFF
+    dq 0x0000000000000000          ; null
+    dq 0x00CF9A000000FFFF          ; 32-bit code
+    dq 0x00CF92000000FFFF          ; 32-bit data
+    dq 0x00AF9A000000FFFF          ; 64-bit code
+    dq 0x00AF92000000FFFF          ; 64-bit data
 
 gdt_end:
 
 gdt_descriptor:
-    dw gdt_end - gdt_start - 1     ; limit
-    dd gdt_start                   ; base
+    dw gdt_end - gdt_start - 1
+    dd gdt_start
