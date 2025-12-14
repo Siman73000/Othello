@@ -1,167 +1,154 @@
-
+#![allow(dead_code)]
 use core::ptr;
 
-#[derive(Clone, Copy, Debug)]
-pub struct Framebuffer {
-    pub base_addr: *mut u8,
-    pub width: usize,
-    pub height: usize,
-    pub pitch: usize,            // bytes per row
-    pub bytes_per_pixel: usize,  // usually 4 (RGBA)
+use crate::serial_write_str;
+
+/// Raw pointer type for boot video info.
+/// Stage2 commonly writes:
+///   +0 width:u16, +2 height:u16, +4 bpp:u16, +6 fb_addr:u32
+/// Some variants write:
+///   +0 width:u16, +2 height:u16, +4 bpp:u16, +6 pitch:u16, +8 fb_addr:u64
+#[repr(C, packed)]
+#[derive(Clone, Copy)]
+pub struct BootVideoInfoRaw {
+    pub width: u16,
+    pub height: u16,
+    pub bpp: u16,
+    // remaining bytes are variant-specific
+    pub rest: [u8; 10],
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct BootFramebuffer {
-    pub base_addr: usize,
+#[derive(Clone, Copy)]
+pub struct Framebuffer {
+    pub base_addr: *mut u8,
     pub width: usize,
     pub height: usize,
     pub pitch: usize,
     pub bytes_per_pixel: usize,
 }
 
-#[derive(Debug)]
-pub enum FramebufferError {
-    MissingInfo,
-    InvalidPitch,
-    ZeroDimensions,
+static mut FB: Option<Framebuffer> = None;
+
+#[inline]
+unsafe fn read_u16_unaligned(p: *const u8) -> u16 {
+    ptr::read_unaligned(p as *const u16)
+}
+#[inline]
+unsafe fn read_u32_unaligned(p: *const u8) -> u32 {
+    ptr::read_unaligned(p as *const u32)
+}
+#[inline]
+unsafe fn read_u64_unaligned(p: *const u8) -> u64 {
+    ptr::read_unaligned(p as *const u64)
 }
 
-static mut FRAMEBUFFER: Option<Framebuffer> = None;
+fn is_plausible_fb(addr: u64) -> bool {
+    // Common LFB is >= 0xE0000000 on QEMU VBE.
+    // Also allow low addresses if identity-mapped.
+    if addr == 0 { return false; }
+    if addr & 0xFFF != 0 { return false; } // page aligned keeps us away from obvious garbage
+    true
+}
 
-pub fn init() {
-    // Placeholder: in a real kernel, this should be called with actual bootloader info.
-    let _ = init_from_boot_info(BootFramebuffer {
-        base_addr: 0xA000_0000, // common legacy framebuffer base
-        width: 1024,
-        height: 768,
-        pitch: 1024 * 4,
-        bytes_per_pixel: 4,
+pub unsafe fn init_from_bootinfo(raw: *const BootVideoInfoRaw) {
+    let base = raw as *const u8;
+
+    let w = read_u16_unaligned(base.add(0)) as usize;
+    let h = read_u16_unaligned(base.add(2)) as usize;
+    let bpp = read_u16_unaligned(base.add(4)) as usize;
+
+    // Try stage2 layout first: fb_addr32 at +6
+    let fb32 = read_u32_unaligned(base.add(6)) as u64;
+
+    // Try extended layout: pitch at +6, fb64 at +8
+    let pitch16 = read_u16_unaligned(base.add(6)) as usize;
+    let fb64 = read_u64_unaligned(base.add(8));
+
+    let (fb_addr, pitch) = if is_plausible_fb(fb32) {
+        (fb32, 0usize)
+    } else if is_plausible_fb(fb64) {
+        (fb64, pitch16)
+    } else {
+        // Last resort: accept fb32 even if not aligned, but log it.
+        serial_write_str("FB WARN: bootinfo fb address looked implausible; using fb32 anyway.\n");
+        (fb32, 0usize)
+    };
+
+    let bytes_per_pixel = (bpp / 8).max(1);
+    let computed_pitch = w.saturating_mul(bytes_per_pixel);
+    let pitch = if pitch != 0 { pitch } else { computed_pitch };
+
+    // Log parsed values (helps debug reboot loops)
+    serial_write_str("FB: init_from_bootinfo\n");
+
+    FB = Some(Framebuffer {
+        base_addr: fb_addr as usize as *mut u8,
+        width: w,
+        height: h,
+        pitch,
+        bytes_per_pixel,
     });
 }
 
-pub fn init_from_boot_info(info: BootFramebuffer) -> Result<(), FramebufferError> {
-    if info.base_addr == 0 {
-        return Err(FramebufferError::MissingInfo);
-    }
-    if info.width == 0 || info.height == 0 || info.bytes_per_pixel == 0 {
-        return Err(FramebufferError::ZeroDimensions);
-    }
-    if info.pitch < info.width.saturating_mul(info.bytes_per_pixel) {
-        return Err(FramebufferError::InvalidPitch);
-    }
+pub fn logical_width() -> usize { unsafe { FB.map(|f| f.width).unwrap_or(0) } }
+pub fn logical_height() -> usize { unsafe { FB.map(|f| f.height).unwrap_or(0) } }
 
-    unsafe {
-        FRAMEBUFFER = Some(Framebuffer {
-            base_addr: info.base_addr as *mut u8,
-            width: info.width,
-            height: info.height,
-            pitch: info.pitch,
-            bytes_per_pixel: info.bytes_per_pixel,
-        });
+#[inline]
+unsafe fn write_px(dst: *mut u8, bpp: usize, color: u32) {
+    match bpp {
+        4 => ptr::write_volatile(dst as *mut u32, color),
+        3 => {
+            // 0x00RRGGBB -> B G R
+            ptr::write_volatile(dst.add(0), (color & 0xFF) as u8);
+            ptr::write_volatile(dst.add(1), ((color >> 8) & 0xFF) as u8);
+            ptr::write_volatile(dst.add(2), ((color >> 16) & 0xFF) as u8);
+        }
+        _ => {}
     }
-
-    clear_screen(0x000000);
-    Ok(())
 }
 
-pub fn clear_screen(color: u32) {
+pub fn clear(color: u32) {
     unsafe {
-        if let Some(fb) = &FRAMEBUFFER {
-            let stride = fb.pitch;
-            let bytes_per_pixel = fb.bytes_per_pixel;
-            let row_span = fb.width * bytes_per_pixel;
-            let color_bytes = color.to_le_bytes();
-
-            for row in 0..fb.height {
-                let row_start = fb.base_addr.add(row * stride);
-                let row_slice = core::slice::from_raw_parts_mut(row_start, row_span);
-                for chunk in row_slice.chunks_exact_mut(bytes_per_pixel) {
-                    chunk.copy_from_slice(&color_bytes[..bytes_per_pixel]);
+        if let Some(fb) = FB {
+            for y in 0..fb.height {
+                let row = fb.base_addr.add(y * fb.pitch);
+                for x in 0..fb.width {
+                    write_px(row.add(x * fb.bytes_per_pixel), fb.bytes_per_pixel, color);
                 }
             }
         }
     }
 }
 
-pub fn blit_rect(
-    dst_x: usize,
-    dst_y: usize,
-    width: usize,
-    height: usize,
-    src_stride: usize,
-    src: &[u8],
-) {
+pub fn fill_rect(x: usize, y: usize, w: usize, h: usize, color: u32) {
     unsafe {
-        if let Some(fb) = &FRAMEBUFFER {
-            let bytes_per_pixel = fb.bytes_per_pixel;
-            let row_len = width.saturating_mul(bytes_per_pixel);
-            for row in 0..height {
-                let dst_y_pos = dst_y + row;
-                if dst_y_pos >= fb.height { break; }
-                let src_offset = row.saturating_mul(src_stride);
-                if src_offset + row_len > src.len() { break; }
-
-                let dst_row_start = fb.base_addr.add(dst_y_pos * fb.pitch);
-                if dst_x >= fb.width { continue; }
-                let dst_offset = dst_x.saturating_mul(bytes_per_pixel);
-                let dst_slice = core::slice::from_raw_parts_mut(dst_row_start.add(dst_offset), row_len.min(fb.pitch.saturating_sub(dst_offset)));
-                let src_slice = &src[src_offset..src_offset + row_len.min(src.len() - src_offset)];
-                let copy_len = dst_slice.len().min(src_slice.len());
-                dst_slice[..copy_len].copy_from_slice(&src_slice[..copy_len]);
-            }
-        }
-    }
-}
-
-pub fn set_pixel(x: usize, y: usize, color: u32) {
-    unsafe {
-        if let Some(fb) = &FRAMEBUFFER {
-            if x >= fb.width || y >= fb.height {
-                return;
-            }
-            let offset = y * fb.pitch + x * fb.bytes_per_pixel;
-            let pixel_ptr = fb.base_addr.add(offset) as *mut u32;
-            ptr::write_volatile(pixel_ptr, color);
-        }
-    }
-}
-
-pub fn draw_rect(x: usize, y: usize, w: usize, h: usize, color: u32) {
-    unsafe {
-        if let Some(fb) = &FRAMEBUFFER {
-            let bytes_per_pixel = fb.bytes_per_pixel;
-            let row_len = w.saturating_mul(bytes_per_pixel);
-            let color_bytes = color.to_le_bytes();
-
-            for row in 0..h {
-                let dst_y_pos = y + row;
-                if dst_y_pos >= fb.height { break; }
-                if x >= fb.width { continue; }
-
-                let dst_row_start = fb.base_addr.add(dst_y_pos * fb.pitch);
-                let dst_offset = x.saturating_mul(bytes_per_pixel);
-                let dst_slice = core::slice::from_raw_parts_mut(
-                    dst_row_start.add(dst_offset),
-                    row_len.min(fb.pitch.saturating_sub(dst_offset)),
-                );
-
-                for chunk in dst_slice.chunks_exact_mut(bytes_per_pixel) {
-                    chunk.copy_from_slice(&color_bytes[..bytes_per_pixel]);
+        if let Some(fb) = FB {
+            let x2 = (x + w).min(fb.width);
+            let y2 = (y + h).min(fb.height);
+            for yy in y..y2 {
+                let row = fb.base_addr.add(yy * fb.pitch);
+                for xx in x..x2 {
+                    write_px(row.add(xx * fb.bytes_per_pixel), fb.bytes_per_pixel, color);
                 }
             }
         }
     }
 }
 
-pub fn commit() {
-    // On real hardware, this may flush caches or signal VSync.
-    // For now, no action is needed since it's direct memory-mapped.
-}
-
-pub fn info() -> Option<(usize, usize)> {
-    unsafe { FRAMEBUFFER.as_ref().map(|fb| (fb.width, fb.height)) }
-}
-
-pub fn descriptor() -> Option<Framebuffer> {
-    unsafe { FRAMEBUFFER }
+pub fn invert_rect(x: usize, y: usize, w: usize, h: usize) {
+    unsafe {
+        if let Some(fb) = FB {
+            if fb.bytes_per_pixel != 4 { return; } // XOR only safe on 32bpp here
+            let x2 = (x + w).min(fb.width);
+            let y2 = (y + h).min(fb.height);
+            for yy in y..y2 {
+                let row = fb.base_addr.add(yy * fb.pitch);
+                for xx in x..x2 {
+                    let p = row.add(xx * 4) as *mut u32;
+                    let v = ptr::read_volatile(p);
+                    ptr::write_volatile(p, v ^ 0x00FF_FFFF);
+                }
+            }
+        }
+    }
 }

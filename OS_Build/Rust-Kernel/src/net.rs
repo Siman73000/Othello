@@ -1,5 +1,4 @@
 #![allow(dead_code)]
-
 pub struct NetScanResult {
     pub devices: &'static [&'static str],
 }

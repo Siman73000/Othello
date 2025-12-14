@@ -346,7 +346,8 @@ Write-Host ""
 # ------------------------------------------------------------------------------
 # 6. Launch QEMU
 # ------------------------------------------------------------------------------
-
+Write-Host "All Systems Go!" -ForegroundColor Green
+Write-Host ""
 Write-Host "==> Launching QEMU with network device (RTL8139) and windowed display..."
 
 if (-not $script:QemuExePath) {
