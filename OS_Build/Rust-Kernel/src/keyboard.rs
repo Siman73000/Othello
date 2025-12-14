@@ -13,7 +13,7 @@ unsafe fn inb(port: u16) -> u8 {
     value
 }
 
-/// Poll the controller for a **keyboard** scan code (filters mouse bytes via AUX bit).
+/// Poll controller for a keyboard scancode (filters mouse bytes via AUX bit).
 pub fn keyboard_poll_scancode() -> Option<u8> {
     unsafe {
         let status = inb(PS2_STATUS);
@@ -23,9 +23,10 @@ pub fn keyboard_poll_scancode() -> Option<u8> {
     }
 }
 
-/// Set-1 scancode -> ASCII byte (very small map). `shift` supported.
+/// Set-1 scancode -> ASCII byte (small map). `shift` supported.
 pub fn scancode_to_ascii(sc: u8, shift: bool) -> Option<u8> {
-    if sc & 0x80 != 0 { return None; } // break code
+    // break code
+    if sc & 0x80 != 0 { return None; }
 
     let b = match sc {
         // numbers row
@@ -81,10 +82,11 @@ pub fn scancode_to_ascii(sc: u8, shift: bool) -> Option<u8> {
         0x34 => if shift { b'>' } else { b'.' },
         0x35 => if shift { b'?' } else { b'/' },
 
-        // space + enter + backspace
+        // space + enter + backspace + tab
         0x39 => b' ',
         0x1C => b'\n',
         0x0E => 0x08,
+        0x0F => b'\t',
 
         _ => return None,
     };

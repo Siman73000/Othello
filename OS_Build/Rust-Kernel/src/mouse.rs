@@ -14,6 +14,8 @@ const MOUSE_RESET_DEFAULTS: u8 = 0xF6;
 const MOUSE_ENABLE_STREAM: u8  = 0xF4;
 const MOUSE_SET_SAMPLE: u8     = 0xF3;
 const MOUSE_GET_ID: u8         = 0xF2;
+const MOUSE_SET_SCALING_1_1: u8 = 0xE6;
+const MOUSE_SET_RESOLUTION: u8  = 0xE8;
 
 #[inline] unsafe fn inb(port: u16) -> u8 {
     let value: u8;
@@ -24,8 +26,8 @@ const MOUSE_GET_ID: u8         = 0xF2;
     asm!("out dx, al", in("dx") port, in("al") value, options(nomem, nostack, preserves_flags));
 }
 
-fn wait_in_clear() { for _ in 0..100_000 { unsafe { if inb(PS2_STATUS) & 0x02 == 0 { return; } } } }
-fn wait_out_full() -> bool { for _ in 0..100_000 { unsafe { if inb(PS2_STATUS) & 0x01 != 0 { return true; } } } false }
+fn wait_in_clear() { for _ in 0..200_000 { unsafe { if inb(PS2_STATUS) & 0x02 == 0 { return; } } } }
+fn wait_out_full() -> bool { for _ in 0..200_000 { unsafe { if inb(PS2_STATUS) & 0x01 != 0 { return true; } } } false }
 
 fn cmd(c: u8) { wait_in_clear(); unsafe { outb(PS2_CMD, c); } }
 fn data(d: u8) { wait_in_clear(); unsafe { outb(PS2_DATA, d); } }
@@ -63,9 +65,14 @@ pub fn mouse_init() {
         cmd(CMD_WRITE_CCB);
         data(ccb);
 
+        // defaults + 1:1 scaling (no hardware accel)
         mouse_write(MOUSE_RESET_DEFAULTS);
+        mouse_write(MOUSE_SET_SCALING_1_1);
 
-        // Enable wheel (IntelliMouse): 200,100,80 sampling trick
+        // resolution (0..3), 3 = 8 counts/mm (typically feels best in QEMU)
+        mouse_write(MOUSE_SET_RESOLUTION); mouse_write(3);
+
+        // IntelliMouse wheel enable: 200,100,80 sampling trick
         mouse_write(MOUSE_SET_SAMPLE); mouse_write(200);
         mouse_write(MOUSE_SET_SAMPLE); mouse_write(100);
         mouse_write(MOUSE_SET_SAMPLE); mouse_write(80);
@@ -73,49 +80,50 @@ pub fn mouse_init() {
         let id = mouse_read();
         PACKET_LEN = if id == 3 { 4 } else { 3 };
 
+        // After enabling wheel, push sample rate back up for smoother motion
+        mouse_write(MOUSE_SET_SAMPLE); mouse_write(200);
+
         mouse_write(MOUSE_ENABLE_STREAM);
         IDX = 0;
     }
 }
 
+/// Return one decoded mouse packet per call (so the caller can process ALL packets for smoothness).
 pub fn mouse_poll(max_w: i32, max_h: i32) -> Option<MouseState> {
-    let mut out = None;
     unsafe {
-        loop {
-            let st = inb(PS2_STATUS);
-            if st & 0x01 == 0 { break; }
-            if st & 0x20 == 0 { break; } // not mouse
-            let b = inb(PS2_DATA);
+        let st = inb(PS2_STATUS);
+        if st & 0x01 == 0 { return None; }
+        if st & 0x20 == 0 { return None; } // not mouse
 
-            // packet sync bit
-            if IDX == 0 && (b & 0x08) == 0 { continue; }
+        let b = inb(PS2_DATA);
 
-            PACKET[IDX] = b;
-            IDX += 1;
-            if IDX < PACKET_LEN { continue; }
-            IDX = 0;
+        // packet sync bit
+        if IDX == 0 && (b & 0x08) == 0 { return None; }
 
-            let b0 = PACKET[0];
-            let b1 = PACKET[1];
-            let b2 = PACKET[2];
+        PACKET[IDX] = b;
+        IDX += 1;
+        if IDX < PACKET_LEN { return None; }
+        IDX = 0;
 
-            let left = (b0 & 0x01) != 0;
-            let right = (b0 & 0x02) != 0;
-            let middle = (b0 & 0x04) != 0;
+        let b0 = PACKET[0];
+        let b1 = PACKET[1];
+        let b2 = PACKET[2];
 
-            let mut dx = b1 as i32;
-            let mut dy = b2 as i32;
-            if b0 & 0x10 != 0 { dx |= !0xFF; }
-            if b0 & 0x20 != 0 { dy |= !0xFF; }
-            dy = -dy;
+        let left = (b0 & 0x01) != 0;
+        let right = (b0 & 0x02) != 0;
+        let middle = (b0 & 0x04) != 0;
 
-            CUR_X = (CUR_X + dx).clamp(0, max_w.saturating_sub(1));
-            CUR_Y = (CUR_Y + dy).clamp(0, max_h.saturating_sub(1));
+        let mut dx = b1 as i32;
+        let mut dy = b2 as i32;
+        if b0 & 0x10 != 0 { dx |= !0xFF; }
+        if b0 & 0x20 != 0 { dy |= !0xFF; }
+        dy = -dy;
 
-            let wheel = if PACKET_LEN == 4 { PACKET[3] as i8 } else { 0 };
+        CUR_X = (CUR_X + dx).clamp(0, max_w.saturating_sub(1));
+        CUR_Y = (CUR_Y + dy).clamp(0, max_h.saturating_sub(1));
 
-            out = Some(MouseState { x: CUR_X, y: CUR_Y, left, right, middle, wheel });
-        }
+        let wheel = if PACKET_LEN == 4 { PACKET[3] as i8 } else { 0 };
+
+        Some(MouseState { x: CUR_X, y: CUR_Y, left, right, middle, wheel })
     }
-    out
 }

@@ -15,6 +15,7 @@ unsafe fn inb(port: u16) -> u8 {
     value
 }
 
+#[inline]
 fn serial_is_transmit_empty() -> bool {
     unsafe { inb(COM1 + 5) & 0x20 != 0 }
 }
