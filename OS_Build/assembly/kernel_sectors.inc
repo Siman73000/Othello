@@ -1,1 +1,1 @@
-%define KERNEL_SECTORS 164
+%define KERNEL_SECTORS 333

@@ -1,6 +1,9 @@
 #![no_std]
 #![no_main]
 
+#[macro_use]
+extern crate alloc;
+
 use core::arch::asm;
 use core::fmt::{self, Write};
 use core::panic::PanicInfo;
@@ -13,12 +16,22 @@ mod idt;
 mod framebuffer_driver;
 mod font;
 mod gui;
+mod editor;
 mod shell;
 mod net;
 mod login;
 mod registry;
 mod regedit;
 mod time;
+
+// Filesystem + persistence
+mod heap;
+mod portio;
+mod crc32;
+mod ata;
+mod persist;
+mod fs;
+mod fs_cmds;
 
 // Re-export so other modules can `use crate::serial_write_str;`
 pub use serial::serial_write_str;
@@ -74,6 +87,24 @@ pub extern "C" fn _start() -> ! {
 
     // Initialize registry state (in-memory for now).
     registry::init();
+
+    // Filesystem (RAM overlay) + persistent backing store (IDE tail log)
+    fs_cmds::init_cwd();
+    if persist::init().is_ok() {
+        let _ = persist::mount_into_ramfs();
+    }
+
+    // If persistence is empty, seed a default layout.
+    {
+        let fsg = fs::FS.lock();
+        let has_etc = fsg.exists("/etc");
+        drop(fsg);
+        if !has_etc {
+            fs::init_default_layout();
+            let _ = persist::sync_dirty(); // optional: write initial layout
+        }
+    }
+
 
     serial_write_str("KERNEL: input init...\n");
     keyboard::keyboard_init();

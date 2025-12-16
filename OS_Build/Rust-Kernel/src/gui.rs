@@ -626,7 +626,6 @@ fn draw_desktop() {
 }
 
 
-
 // ----------------------------------------------------------------------------
 // Fast window move helpers (damage redraw)
 // ----------------------------------------------------------------------------
@@ -756,7 +755,6 @@ fn draw_desktop_region(r: Rect) {
         }
     }
 }
-
 
 /// Redraw only the regions of `old` that are no longer covered by `new`.
 fn redraw_exposed(old: Rect, new: Rect) {

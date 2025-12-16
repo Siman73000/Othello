@@ -2,7 +2,7 @@
 
 use core::arch::asm;
 
-use crate::{framebuffer_driver as fb, gui, keyboard, login, mouse, net, regedit, time};
+use crate::{framebuffer_driver as fb, gui, keyboard, login, mouse, net, regedit, editor, fs, time};
 use crate::serial_write_str;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -10,6 +10,7 @@ enum AppState {
     Login,
     Terminal,
     Regedit,
+    Editor,
 }
 
 
@@ -21,6 +22,7 @@ pub fn active_taskbar_index() -> u8 {
             AppState::Terminal => 0,
             AppState::Login => 2,
             AppState::Regedit => 5,
+            AppState::Editor => 4,
         }
     }
 }
@@ -29,7 +31,7 @@ static mut APP: AppState = AppState::Login;
 
 fn set_app(app: AppState) {
     // Don't allow entering terminal/regedit without an authenticated session.
-    if (app == AppState::Terminal || app == AppState::Regedit) && !login::is_logged_in() {
+    if (app == AppState::Terminal || app == AppState::Regedit || app == AppState::Editor) && !login::is_logged_in() {
         unsafe { APP = AppState::Login; }
         gui::set_ui_mode(gui::UiMode::Login);
         gui::set_shell_visible(false);
@@ -59,6 +61,12 @@ fn set_app(app: AppState) {
             gui::set_shell_title("Registry");
             regedit::reset();
         }
+        AppState::Editor => {
+            gui::set_ui_mode(gui::UiMode::Desktop);
+            gui::set_shell_visible(true);
+            gui::set_shell_maximized(true);
+            gui::set_shell_title("Text Editor");
+        }
     }
     render_active_full();
 }
@@ -69,6 +77,7 @@ fn render_active_full() {
             AppState::Login => login::render_fullscreen(),
             AppState::Terminal => render_terminal_full(),
             AppState::Regedit => regedit::render(),
+            AppState::Editor => editor::render(),
         }
     }
 }
@@ -257,6 +266,15 @@ fn print_line(bytes: &[u8], fg: u32) {
     }
 }
 
+
+fn print_str_lines(s: &str, fg: u32) {
+    if s.is_empty() { return; }
+    for line in s.split('\n') {
+        if line.is_empty() { continue; }
+        print_line(line.as_bytes(), fg);
+    }
+}
+
 fn print_prompt_and_input() {
     if !gui::shell_is_visible() { return; }
 
@@ -270,12 +288,27 @@ fn print_prompt_and_input() {
     gui::begin_paint();
     clear_rect(fx, fy, fw, fh, BG);
 
-    // "$ " prompt
-    gui::draw_byte_nocursor(fx + 6, fy + 1, b'$', DIM, BG);
-    gui::draw_byte_nocursor(fx + 14, fy + 1, b' ', DIM, BG);
+    // prompt: "<dir> $ "
+    let cwd = crate::fs_cmds::cwd();
+    // prompt: full current path (e.g. /bin/test)
+    let name: &str = if cwd.is_empty() { "/" } else { cwd.as_str() };
+
+    // Draw prompt at (fx+6, fy+1)
+    let mut px = fx + 6;
+    // Keep prompt reasonably short to avoid eating the whole line
+    let max_name_chars: usize = 20;
+    let name_bytes = name.as_bytes();
+    let start = if name_bytes.len() > max_name_chars { name_bytes.len() - max_name_chars } else { 0 };
+    for &b in &name_bytes[start..] {
+        gui::draw_byte_nocursor(px, fy + 1, b, DIM, BG);
+        px += CH_W;
+    }
+    gui::draw_byte_nocursor(px, fy + 1, b' ', DIM, BG); px += CH_W;
+    gui::draw_byte_nocursor(px, fy + 1, b'$', DIM, BG); px += CH_W;
+    gui::draw_byte_nocursor(px, fy + 1, b' ', DIM, BG); px += CH_W;
 
     // input
-    let start_x = fx + 22;
+    let start_x = px;
     unsafe {
         let bytes = &INBUF[..INLEN];
         let clip_r = fx + fw - 4;
@@ -341,9 +374,42 @@ fn exec_command(line: &[u8]) -> Option<AppState> {
     let mut arg = &line[sp..];
     while !arg.is_empty() && arg[0] == b' ' { arg = &arg[1..]; }
 
+    // Try filesystem / persistence commands first:
+    // pwd, cd, ls, cat, mkdir, touch, rm, write, append, sync, persist
+    if let (Ok(cmd_s), Ok(arg_s)) = (core::str::from_utf8(cmd), core::str::from_utf8(arg)) {
+        let mut argv: [&str; 16] = [""; 16];
+        let mut argc = 0usize;
+        for tok in arg_s.split_whitespace() {
+            if argc >= argv.len() { break; }
+            argv[argc] = tok;
+            argc += 1;
+        }
+        if let Some(out) = crate::fs_cmds::try_handle(cmd_s, &argv[..argc]) {
+            if !out.is_empty() {
+                print_str_lines(&out, FG);
+            }
+            return None;
+        }
+        // Text editor: edit <path>
+        if cmd_s == "edit" || cmd_s == "notepad" {
+            let path = if argc > 0 { argv[0] } else { "/home/user/readme.txt" };
+            let cwd = crate::fs_cmds::cwd();
+            match fs::normalize_path(&cwd, path) {
+                Ok(abs) => {
+                    editor::open_abs(&abs);
+                    return Some(AppState::Editor);
+                }
+                Err(_) => {
+                    print_line(b"edit: invalid path", ERR);
+                    return None;
+                }
+            }
+        }
+    }
+
     match cmd {
         b"help" => {
-            print_line(b"Commands: help, clear, net, about, login, reg, tsc, echo <text>", DIM);
+            print_line(b"Commands: help, clear, net, about, login, reg, tsc, echo <text>, pwd, cd, ls, cat, mkdir, touch, rm, write, append, sync, persist", DIM);
             print_line(b"Tips: click the dock 'T' to hide/show the shell.", DIM);
             print_line(b"      click traffic lights to close/min/max.", DIM);
             None
@@ -437,6 +503,7 @@ pub fn run_shell() -> ! {
     login::render_fullscreen();
 
     let mut shift = false;
+    let mut ctrl = false;
     let mut ext = false;
     let mut last_tsc = time::rdtsc();
     let mut was_dragging = false;
@@ -489,6 +556,16 @@ pub fn run_shell() -> ! {
                                 let _ = exec_command(b"about");
                                 if !gui::shell_is_dragging() { print_prompt_and_input(); }
                             }
+                            4 => {
+                                // Text Editor: open /home/user/readme.txt
+                                let cwd = crate::fs_cmds::cwd();
+                                if let Ok(p) = fs::normalize_path(&cwd, "/home/user/readme.txt") {
+                                    editor::open_abs(&p);
+                                } else {
+                                    editor::open_abs("/home/user/readme.txt");
+                                }
+                                set_app(AppState::Editor);
+                            }
                             5 => {
                                 // Registry
                                 set_app(AppState::Regedit);
@@ -527,6 +604,10 @@ pub fn run_shell() -> ! {
             // shift make/break
             if sc == 0x2A || sc == 0x36 { shift = true; continue; }
             if sc == 0xAA || sc == 0xB6 { shift = false; continue; }
+            // ctrl make/break
+            if sc == 0x1D { ctrl = true; ext = false; continue; }
+            if sc == 0x9D { ctrl = false; ext = false; continue; }
+
             // If we're on the desktop and the shell is hidden, still drain keyboard bytes.
             // The PS/2 controller uses a shared output buffer; leaving a keyboard byte
             // unread can block mouse packets and make the cursor appear frozen.
@@ -561,6 +642,11 @@ pub fn run_shell() -> ! {
                                 regedit::render();
                             }
                         }
+                        AppState::Editor => {
+                            if let editor::EditorAction::Redraw = editor::handle_ext_scancode(sc, ctrl) {
+                                editor::render();
+                            }
+                        }
                     }
                 }
                 continue;
@@ -582,14 +668,46 @@ pub fn run_shell() -> ! {
                                 regedit::render();
                             }
                         }
+                                                AppState::Editor => {
+                            match editor::handle_char(ch, ctrl) {
+                                editor::EditorAction::None => {}
+                                editor::EditorAction::Redraw => editor::render(),
+                                editor::EditorAction::Save => {
+                                    let ok = editor::save();
+                                    editor::set_status_saved(ok);
+                                    editor::render();
+                                }
+                                editor::EditorAction::Exit => {
+                                    editor::close();
+                                    set_app(AppState::Terminal);
+                                }
+                            }
+                        }
                         AppState::Terminal => match ch {
                     b'\n' => {
                         // Print the entered command as a terminal line and execute.
                         let req = unsafe {
                             let mut line = [0u8; 192];
                             let mut n = 0usize;
-                            line[n..n + 2].copy_from_slice(b"$ ");
-                            n += 2;
+                            // include current dir in the echoed prompt: "<dir> $ "
+                            {
+                                let cwd = crate::fs_cmds::cwd();
+    // prompt: full current path (e.g. /bin/test)
+    let name: &str = if cwd.is_empty() { "/" } else { cwd.as_str() };
+
+                                let max_name_chars: usize = 20;
+                                let nb = name.as_bytes();
+                                let start = if nb.len() > max_name_chars { nb.len() - max_name_chars } else { 0 };
+                                for &b in &nb[start..] {
+                                    if n >= line.len() { break; }
+                                    line[n] = b;
+                                    n += 1;
+                                }
+                                if n + 3 <= line.len() {
+                                    line[n] = b' '; line[n + 1] = b'$'; line[n + 2] = b' ';
+                                    n += 3;
+                                }
+                            }
                             let take = INLEN.min(line.len().saturating_sub(n));
                             line[n..n + take].copy_from_slice(&INBUF[..take]);
                             n += take;
