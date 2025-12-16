@@ -378,7 +378,8 @@ $qemuArgs = @(
     "-netdev", "user,id=n0",
     "-vga", "std",
     # SDL display with GL; you can add '-full-screen' as another arg if desired
-    "-display", "sdl"
+    "-display", "sdl",
+    "-rtc", "base=localtime"
 )
 
 & $script:QemuExePath @qemuArgs

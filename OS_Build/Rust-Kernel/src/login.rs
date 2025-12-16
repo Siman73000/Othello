@@ -6,7 +6,7 @@
 //! - Passwords are stored as salted hashes in the in-memory registry
 //! - Rendered full-screen (Windows-11-ish) when gui::UiMode::Login is active
 
-use crate::{gui, registry};
+use crate::{gui, registry, time};
 
 const FG: u32 = 0xE5E7EB;
 const BG: u32 = 0x0B1220;
@@ -28,46 +28,46 @@ const CH_H: i32 = 16;
 // resilient without touching your boot pipeline.
 // ----------------------------------------------------------------------------
 
-#[link_section = ".text"]
+#[link_section = ".data"]
 static STR_TITLE: [u8; 10] = *b"Othello OS";
-#[link_section = ".text"]
+#[link_section = ".data"]
 static STR_SUB_LOGIN: [u8; 7] = *b"Sign in";
-#[link_section = ".text"]
+#[link_section = ".data"]
 static STR_SUB_CREATE: [u8; 14] = *b"Create account";
 
-#[link_section = ".text"]
+#[link_section = ".data"]
 static STR_TAB_LOGIN: [u8; 9] = *b"[L] Login";
-#[link_section = ".text"]
+#[link_section = ".data"]
 static STR_TAB_CREATE: [u8; 10] = *b"[C] Create";
 
-#[link_section = ".text"]
+#[link_section = ".data"]
 static STR_USERNAME: [u8; 8] = *b"Username";
-#[link_section = ".text"]
+#[link_section = ".data"]
 static STR_PASSWORD: [u8; 8] = *b"Password";
-#[link_section = ".text"]
+#[link_section = ".data"]
 static STR_CONFIRM: [u8; 16] = *b"Confirm password";
 
-#[link_section = ".text"]
+#[link_section = ".data"]
 static STR_HELP: [u8; 43] = *b"Tab: next  Enter: submit  Backspace: delete";
 
-#[link_section = ".text"]
+#[link_section = ".data"]
 static MSG_HINT_LOGIN_OR_CREATE: [u8; 57] = *b"Enter username/password. Press C to create a new account.";
-#[link_section = ".text"]
+#[link_section = ".data"]
 static MSG_HINT_FIRST_USER: [u8; 41] = *b"No users found. Create the first account.";
-#[link_section = ".text"]
+#[link_section = ".data"]
 static MSG_MODE_LOGIN: [u8; 46] = *b"Login: type username/password and press Enter.";
-#[link_section = ".text"]
+#[link_section = ".data"]
 static MSG_MODE_CREATE: [u8; 57] = *b"Create: choose username + password + confirm, then Enter.";
 
-#[link_section = ".text"]
+#[link_section = ".data"]
 static MSG_ERR_MISSING: [u8; 28] = *b"Missing username or password";
-#[link_section = ".text"]
+#[link_section = ".data"]
 static MSG_OK_LOGIN: [u8; 16] = *b"Login successful";
-#[link_section = ".text"]
+#[link_section = ".data"]
 static MSG_ERR_INVALID: [u8; 28] = *b"Invalid username or password";
-#[link_section = ".text"]
+#[link_section = ".data"]
 static MSG_ERR_MATCH: [u8; 22] = *b"Passwords do not match";
-#[link_section = ".text"]
+#[link_section = ".data"]
 static MSG_OK_CREATED: [u8; 27] = *b"Account created & logged in";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -362,6 +362,17 @@ pub fn render_fullscreen() {
             Mode::Create => &STR_SUB_CREATE[..],
         };
         draw_str(px + 24, py + 18 + CH_H, sub, DIM, BG);
+
+    // Current date/time (from CMOS RTC) in header (top-right of card)
+    {
+        let dt = time::rtc_now();
+        let mut tbuf = [0u8; 32];
+        let n = time::format_datetime(&mut tbuf, dt);
+        let tw = (n as i32) * CH_W;
+        let x = (px + panel_w - 24 - tw).max(px + 24);
+        draw_str(x, py + 18, &tbuf[..n], DIM, BG);
+    }
+
     }
 
     // Tabs (Windows-ish)

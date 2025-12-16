@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use crate::{framebuffer_driver as fb, font};
+use crate::{framebuffer_driver as fb, font, time};
 use crate::mouse::MouseState;
 use crate::serial_write_str;
 
@@ -56,6 +56,11 @@ static mut DRAG_ACTIVE: bool = false;
 static mut DRAG_OFF_X: i32 = 0;
 static mut DRAG_OFF_Y: i32 = 0;
 
+// Taskbar (Windows 11-ish)
+const TASKBAR_H: i32 = 44;
+const TASKBAR_BG: u32 = 0x0B1220;
+const TASKBAR_TOP: u32 = 0x1F2A3A;
+
 // Dock layout (computed from screen)
 const DOCK_ICON_COUNT: usize = 6;
 static mut DOCK_RECT: Rect = Rect { x: 0, y: 0, w: 0, h: 0 };
@@ -77,45 +82,149 @@ static mut CUR_SAVE: [u32; CUR_W * CUR_H] = [0; CUR_W * CUR_H];
 const CUR_BLACK: u32 = 0x000000;
 const CUR_WHITE: u32 = 0xFFFFFF;
 
-// Put the cursor bitmap in `.text` so it is present even if the build pipeline
-// only packages the `.text` section into the final kernel image.
-#[link_section = ".text"]
-// 16x16 left_ptr style cursor (hotspot at 0,0)
+// Put the cursor bitmap in `.data` for the same reason as the font table:
+// if `.rodata` isn't loaded by the boot pipeline, the cursor can disappear.
+#[link_section = ".data"]
 static CUR_BITMAP: [u8; CUR_W * CUR_H] = [
-    // Row 0
-    1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-    // Row 1
-    1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-    // Row 2
-    1,2,1,0,0,0,0,0,0,0,0,0,0,0,0,0,
-    // Row 3
-    1,2,2,1,0,0,0,0,0,0,0,0,0,0,0,0,
-    // Row 4
-    1,2,2,2,1,0,0,0,0,0,0,0,0,0,0,0,
-    // Row 5
-    1,2,2,2,2,1,0,0,0,0,0,0,0,0,0,0,
-    // Row 6
-    1,2,2,2,2,2,1,0,0,0,0,0,0,0,0,0,
-    // Row 7
-    1,2,2,2,2,2,2,1,0,0,0,0,0,0,0,0,
-    // Row 8
-    1,2,2,2,2,2,2,2,1,0,0,0,0,0,0,0,
-    // Row 9
-    1,2,2,2,2,2,2,2,2,1,0,0,0,0,0,0,
-    // Row 10
-    1,2,2,2,2,2,1,1,1,1,1,0,0,0,0,0,
-    // Row 11
-    1,2,2,1,2,2,1,0,0,0,0,0,0,0,0,0,
-    // Row 12
-    1,1,0,0,1,2,2,1,0,0,0,0,0,0,0,0,
-    // Row 13
-    1,0,0,0,0,1,2,2,1,0,0,0,0,0,0,0,
-    // Row 14
-    0,0,0,0,0,1,2,2,1,0,0,0,0,0,0,0,
-    // Row 15
-    0,0,0,0,0,0,1,1,0,0,0,0,0,0,0,0,
+    1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    1, 2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    1, 2, 2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    1, 2, 2, 2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    1, 2, 2, 2, 2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    1, 2, 2, 2, 2, 2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0,
+    1, 2, 2, 2, 2, 2, 2, 1, 1, 0, 0, 0, 0, 0, 0, 0,
+    1, 2, 2, 2, 2, 2, 2, 2, 1, 1, 0, 0, 0, 0, 0, 0,
+    1, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 0, 0, 0, 0, 0,
+    1, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0,
+    1, 2, 2, 2, 2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 ];
 
+// ----------------------------------------------------------------------------
+// Taskbar icon bitmaps (16x16) with 2-tone rendering
+// 0 = transparent, outline bits render with ICON_OUTLINE, fill bits render with ICON_FILL.
+// We put these in .text so they survive "text-only" kernel packaging.
+// ----------------------------------------------------------------------------
+
+#[repr(C)]
+struct Icon16 {
+    outline: [u16; 16],
+    fill: [u16; 16],
+}
+
+const ICON_OUTLINE: u32 = 0x0F172A;
+const ICON_FILL: u32    = 0xE5E7EB;
+const ICON_ACTIVE: u32  = 0x2563EB; // active highlight bg
+const ICON_HOVER: u32   = 0x1F2937; // hover highlight bg
+
+#[link_section = ".text"]
+static ICON_TERM: Icon16 = Icon16 {
+    outline: [
+        0x0000, 0x7FFC, 0x4004, 0x4004, 0x4184, 0x4244, 0x4224, 0x4244,
+        0x4184, 0x4044, 0x4004, 0x4004, 0x4004, 0x7FFC, 0x0000, 0x0000,
+    ],
+    fill: [
+        0x0000, 0x0000, 0x3FF8, 0x3FF8, 0x3E78, 0x3C38, 0x3C18, 0x3C38,
+        0x3E78, 0x3FB8, 0x3E18, 0x3FF8, 0x3FF8, 0x0000, 0x0000, 0x0000,
+    ],
+};
+
+#[link_section = ".text"]
+static ICON_NET: Icon16 = Icon16 {
+    outline: [
+        0x0000, 0x0000, 0x1FF8, 0x2004, 0x4002, 0x4002, 0x1818, 0x0810,
+        0x0660, 0x0240, 0x0240, 0x0180, 0x0180, 0x0000, 0x0000, 0x0000,
+    ],
+    fill: [
+        0x0000, 0x0000, 0x0000, 0x1FF8, 0x3C3C, 0x300C, 0x0000, 0x0660,
+        0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
+    ],
+};
+
+#[link_section = ".text"]
+static ICON_LOCK: Icon16 = Icon16 {
+    outline: [
+        0x0000, 0x03C0, 0x0420, 0x0810, 0x0810, 0x0810, 0x0FF0, 0x1FF8,
+        0x1008, 0x1008, 0x1008, 0x1008, 0x1FF8, 0x0000, 0x0000, 0x0000,
+    ],
+    fill: [
+        0x0000, 0x0000, 0x03C0, 0x07E0, 0x07E0, 0x07E0, 0x0000, 0x0000,
+        0x0FF0, 0x0FF0, 0x0FF0, 0x0FF0, 0x0000, 0x0000, 0x0000, 0x0000,
+    ],
+};
+
+#[link_section = ".text"]
+static ICON_ABOUT: Icon16 = Icon16 {
+    outline: [
+        0x0000, 0x07E0, 0x1818, 0x2004, 0x2184, 0x4182, 0x4002, 0x4182,
+        0x4182, 0x4002, 0x4182, 0x2184, 0x2004, 0x1818, 0x07E0, 0x0000,
+    ],
+    fill: [
+        0x0000, 0x0000, 0x07E0, 0x1FF8, 0x1E78, 0x3E7C, 0x3FFC, 0x3E7C,
+        0x3E7C, 0x3FFC, 0x3E7C, 0x1E78, 0x1FF8, 0x07E0, 0x0000, 0x0000,
+    ],
+};
+
+#[link_section = ".text"]
+static ICON_FILES: Icon16 = Icon16 {
+    outline: [
+        0x0000, 0x0000, 0x3FF8, 0x2038, 0x2048, 0x2048, 0x2004, 0x2004,
+        0x2004, 0x2004, 0x2004, 0x2004, 0x3FFC, 0x0000, 0x0000, 0x0000,
+    ],
+    fill: [
+        0x0000, 0x0000, 0x0000, 0x1FC0, 0x1F80, 0x1F80, 0x1FF8, 0x1FF8,
+        0x1FF8, 0x1FF8, 0x1FF8, 0x1FF8, 0x0000, 0x0000, 0x0000, 0x0000,
+    ],
+};
+
+#[link_section = ".text"]
+static ICON_REG: Icon16 = Icon16 {
+    outline: [
+        0x0000, 0x3CF0, 0x2080, 0x2080, 0x3CF0, 0x0F00, 0x0800, 0x0800,
+        0x0F00, 0x3C00, 0x2000, 0x2000, 0x3C00, 0x0000, 0x0000, 0x0000,
+    ],
+    fill: [
+        0x0000, 0x0000, 0x1C70, 0x1C70, 0x0000, 0x0000, 0x0700, 0x0700,
+        0x0000, 0x0000, 0x1C00, 0x1C00, 0x0000, 0x0000, 0x0000, 0x0000,
+    ],
+};
+
+#[inline]
+fn draw_icon16_scaled(x: i32, y: i32, scale: i32, icon: &Icon16, outline: u32, fill: u32) {
+    if scale <= 0 { return; }
+    for row in 0..16 {
+        let o = icon.outline[row];
+        let f = icon.fill[row];
+        for col in 0..16 {
+            let bit = 1u16 << (15 - col);
+            let px = x + col as i32 * scale;
+            let py = y + row as i32 * scale;
+
+            if (o & bit) != 0 {
+                fb::fill_rect(px.max(0) as usize, py.max(0) as usize, scale as usize, scale as usize, outline);
+            } else if (f & bit) != 0 {
+                fb::fill_rect(px.max(0) as usize, py.max(0) as usize, scale as usize, scale as usize, fill);
+            }
+        }
+    }
+}
+
+#[inline]
+fn icon_for_index(i: usize) -> &'static Icon16 {
+    match i {
+        0 => &ICON_TERM,
+        1 => &ICON_NET,
+        2 => &ICON_LOCK,
+        3 => &ICON_ABOUT,
+        4 => &ICON_FILES,
+        _ => &ICON_REG,
+    }
+}
+// Theme
 pub const SHELL_BG_COLOR: u32 = 0x0F172A;// window body background
 pub const SHELL_FG_COLOR: u32 = 0xE5E7EB;
 
@@ -296,16 +405,23 @@ fn recompute_dock_layout() {
     unsafe {
         let w = SCREEN_W.max(0) as i32;
         let h = SCREEN_H.max(0) as i32;
-        let dock_w = ((w * 60) / 100).min(900).max(520);
-        let dock_h = 54;
-        let dock_x = (w - dock_w) / 2;
-        let dock_y = h - dock_h - 16;
-        DOCK_RECT = Rect { x: dock_x, y: dock_y, w: dock_w, h: dock_h };
+        if w <= 0 || h <= 0 { return; }
 
-        let mut x = dock_x + 16;
+        // Taskbar rect (we reuse DOCK_RECT as the "reserved" bottom area)
+        let tb_y = (h - TASKBAR_H).max(0);
+        DOCK_RECT = Rect { x: 0, y: tb_y, w, h: TASKBAR_H };
+
+        // Windows 11-ish centered icons inside the taskbar
+        let icon_box: i32 = 36;     // clickable box (we draw a 16x16 icon scaled 2x inside)
+        let gap: i32 = 10;
+        let group_w = (DOCK_ICON_COUNT as i32) * icon_box + ((DOCK_ICON_COUNT as i32) - 1) * gap;
+        let start_x = (w - group_w) / 2;
+        let y = tb_y + (TASKBAR_H - icon_box) / 2;
+
+        let mut x = start_x;
         for i in 0..DOCK_ICON_COUNT {
-            DOCK_ICONS[i] = Rect { x, y: dock_y + 10, w: 34, h: 34 };
-            x += 46;
+            DOCK_ICONS[i] = Rect { x, y, w: icon_box, h: icon_box };
+            x += icon_box + gap;
         }
     }
 }
@@ -412,6 +528,80 @@ fn draw_login_background() {
     }
 }
 
+fn paint_taskbar_and_dock() {
+    unsafe {
+        let w = SCREEN_W.max(0) as usize;
+        let h = SCREEN_H.max(0) as i32;
+        if w == 0 || h <= 0 { return; }
+
+        // Taskbar background (bottom)
+        let tb_y = (h - TASKBAR_H).max(0);
+        fb::fill_rect(0, tb_y as usize, w, TASKBAR_H as usize, TASKBAR_BG);
+        fb::fill_rect(0, tb_y as usize, w, 1, TASKBAR_TOP);
+
+        // Taskbar icons (centered)
+        recompute_dock_layout();
+
+        let active_app = if SHELL_VISIBLE { crate::shell::active_taskbar_index() } else { 255u8 };
+
+        for i in 0..DOCK_ICON_COUNT {
+            let r = DOCK_ICONS[i];
+
+            let hovered = r.contains(CUR_X, CUR_Y);
+            let shell_active = (i == 0 && SHELL_VISIBLE);
+
+            let bg = if shell_active {
+                ICON_ACTIVE
+            } else if hovered {
+                ICON_HOVER
+            } else {
+                TASKBAR_BG
+            };
+
+            if bg != TASKBAR_BG {
+                fill_round_rect(r.x, r.y, r.w, r.h, 10, bg);
+            }
+
+            // Draw 16x16 icon scaled 2x (32x32) centered in the box (36x36)
+            let scale = 2;
+            let icon_px = 16 * scale;
+            let ix = r.x + (r.w - icon_px) / 2;
+            let iy = r.y + (r.h - icon_px) / 2;
+            draw_icon16_scaled(ix, iy, scale, icon_for_index(i), ICON_OUTLINE, ICON_FILL);
+
+            // Running indicator dot for current active view inside the shell
+            if i as u8 == active_app {
+                let dot_w = 8;
+                let dot_x = r.x + (r.w - dot_w) / 2;
+                fb::fill_rect(dot_x as usize, (r.y + r.h + 2) as usize, dot_w as usize, 2, 0xE5E7EB);
+            }
+        }
+
+        // Clock (bottom-right)
+        let dt = time::rtc_now();
+        let mut buf = [0u8; 32];
+        let n = time::format_datetime(&mut buf, dt);
+        let s = unsafe { core::str::from_utf8_unchecked(&buf[..n]) };
+
+        let text_w = (n as i32) * (font::FONT_W as i32);
+        let x = (SCREEN_W - 16 - text_w).max(12);
+        let y = tb_y + (TASKBAR_H - font::FONT_H as i32) / 2;
+
+        // Clear a small region behind the text (prevents leftovers on variable widths)
+        fb::fill_rect((x - 8).max(0) as usize, y.max(0) as usize, (text_w + 16) as usize, font::FONT_H, TASKBAR_BG);
+        draw_text_nocursor(x, y, s, 0xE5E7EB, TASKBAR_BG);
+    }
+}
+
+/// Redraw just the bottom taskbar + dock + clock (does NOT touch the shell window contents).
+pub fn redraw_taskbar() {
+    unsafe {
+        begin_paint();
+        paint_taskbar_and_dock();
+        end_paint();
+    }
+}
+
 fn draw_desktop() {
     unsafe {
         let w = SCREEN_W.max(0) as usize;
@@ -430,36 +620,11 @@ fn draw_desktop() {
         fb::fill_rect(0, 31, w, 1, ACCENT);
         draw_text_nocursor(12, 8, "O t h e l l o  O S", 0xE5E7EB, TOPBAR_BG);
 
-        // Dock
-        recompute_dock_layout();
-        let d = DOCK_RECT;
-        fill_round_rect(d.x, d.y, d.w, d.h, 16, DOCK_BG);
-        fb::fill_rect(d.x as usize, (d.y + d.h - 1) as usize, d.w as usize, 1, WINDOW_BRD);
-
-        // Simple dock icons + labels
-        for i in 0..DOCK_ICON_COUNT {
-            let r = DOCK_ICONS[i];
-            let ic = if i == 0 && SHELL_VISIBLE { ACCENT } else { 0x334155 };
-            fill_round_rect(r.x, r.y, r.w, r.h, 10, ic);
-
-            // 1-letter label so you can tell what’s what
-            let label = match i {
-                0 => "T", // Terminal/Shell
-                1 => "N", // Network
-                2 => "L", // Lock/Login
-                3 => "A", // About
-                4 => "F", // Files
-                _ => "R", // Registry
-            };
-            draw_text_nocursor(r.x + 12, r.y + 9, label, 0xE5E7EB, ic);
-
-            // Running indicator dot (for “launched” apps)
-            if i == 0 && SHELL_VISIBLE {
-                fb::fill_rect((r.x + 14) as usize, (r.y + r.h + 3) as usize, 6, 2, 0xE5E7EB);
-            }
-        }
+        // Bottom taskbar (icons + clock)
+        paint_taskbar_and_dock();
+    }
 }
-}
+
 
 
 // ----------------------------------------------------------------------------
@@ -587,34 +752,11 @@ fn draw_desktop_region(r: Rect) {
         // Dock overlap: redraw full dock (small) if intersecting
         recompute_dock_layout();
         if let Some(_) = intersect(r, DOCK_RECT) {
-            let d = DOCK_RECT;
-            fill_round_rect(d.x, d.y, d.w, d.h, 16, DOCK_BG);
-            fb::fill_rect(d.x as usize, (d.y + d.h - 1) as usize, d.w as usize, 1, WINDOW_BRD);
-
-            for i in 0..DOCK_ICON_COUNT {
-                let rr = DOCK_ICONS[i];
-                let ic = if i == 0 && SHELL_VISIBLE { ACCENT } else { 0x334155 };
-                fill_round_rect(rr.x, rr.y, rr.w, rr.h, 10, ic);
-
-                // 1-letter labels (match draw_desktop()) so they don't disappear
-                // when we repaint the dock due to window dragging.
-                let label = match i {
-                    0 => "T",
-                    1 => "N",
-                    2 => "L",
-                    3 => "A",
-                    4 => "F",
-                    _ => "R",
-                };
-                draw_text_nocursor(rr.x + 12, rr.y + 9, label, 0xE5E7EB, ic);
-
-                if i == 0 && SHELL_VISIBLE {
-                    fb::fill_rect((rr.x + 14) as usize, (rr.y + rr.h + 3) as usize, 6, 2, 0xE5E7EB);
-                }
-            }
+            paint_taskbar_and_dock();
         }
     }
 }
+
 
 /// Redraw only the regions of `old` that are no longer covered by `new`.
 fn redraw_exposed(old: Rect, new: Rect) {
@@ -972,8 +1114,7 @@ fn cursor_restore() {
                 let py = oy + cy;
                 if px < 0 || py < 0 || px >= SCREEN_W || py >= SCREEN_H { continue; }
                 let idx = (cy as usize) * CUR_W + (cx as usize);
-                // Use fill_rect(1x1) for maximum compatibility on 24bpp modes.
-                fb::fill_rect(px as usize, py as usize, 1, 1, CUR_SAVE[idx]);
+                fb::set_pixel(px as usize, py as usize, CUR_SAVE[idx]);
             }
         }
         CUR_DRAWN = false;
@@ -1016,8 +1157,7 @@ fn cursor_redraw() {
                 if v == 0 { continue; }
 
                 let col = if v == 2 { CUR_WHITE } else { CUR_BLACK };
-                // Use fill_rect(1x1) for maximum compatibility on 24bpp modes.
-                fb::fill_rect(px as usize, py as usize, 1, 1, col);
+                fb::set_pixel(px as usize, py as usize, col);
             }
         }
 

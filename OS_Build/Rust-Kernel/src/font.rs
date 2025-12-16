@@ -8,12 +8,8 @@ pub const FONT_H: usize = 16;
 // If that happens, all immutable `static` data (fonts, cursor bitmaps, string literals)
 // can appear as zeroes at runtime, which makes *all text/cursors invisible*.
 //
-// Many bare-metal build pipelines `objcopy` only the `.text` section into the final
-// kernel image. If the font table lands in `.rodata`/`.data`, it can silently become
-// all-zero at runtime (making *all text invisible*).
-//
-// Put the font table directly in `.text` so it is guaranteed to be present.
-#[link_section = ".text"]
+// To be resilient, place the font table in `.data` (which most kernels already load).
+#[link_section = ".data"]
 pub static FONT8X8: [[u8; 8]; 128] = include!("font8x8_basic.incl");
 
 /// Return the 8-bit row mask for a glyph at a 16px font height.

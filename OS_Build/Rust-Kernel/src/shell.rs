@@ -12,6 +12,19 @@ enum AppState {
     Regedit,
 }
 
+
+/// Which taskbar icon should show the "running" indicator for the active view.
+/// 0 = Terminal, 2 = Login/Lock, 5 = Registry
+pub fn active_taskbar_index() -> u8 {
+    unsafe {
+        match APP {
+            AppState::Terminal => 0,
+            AppState::Login => 2,
+            AppState::Regedit => 5,
+        }
+    }
+}
+
 static mut APP: AppState = AppState::Login;
 
 fn set_app(app: AppState) {
@@ -427,6 +440,7 @@ pub fn run_shell() -> ! {
     let mut ext = false;
     let mut last_tsc = time::rdtsc();
     let mut was_dragging = false;
+    let mut last_clock_sec: u8 = 0xFF;
 
     loop {
         // Process all mouse packets (cursor + UI)
@@ -629,6 +643,22 @@ pub fn run_shell() -> ! {
                 }
             }
         }
+
+
+// Update on-screen clock once per RTC second.
+// - Login: full-screen re-render (safe)
+// - Desktop: redraw taskbar only (won't erase window contents)
+{
+    let dt = time::rtc_now();
+    if dt.second != last_clock_sec {
+        last_clock_sec = dt.second;
+        if gui::ui_mode() == gui::UiMode::Login {
+            login::render_fullscreen();
+        } else {
+            gui::redraw_taskbar();
+        }
+    }
+}
 
         unsafe { asm!("pause", options(nomem, nostack, preserves_flags)); }
     }
