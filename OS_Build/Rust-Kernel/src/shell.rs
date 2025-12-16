@@ -752,7 +752,7 @@ pub fn run_shell() -> ! {
         unsafe {
             if APP == AppState::Terminal {
                 let now = time::rdtsc();
-                if !dragging && now.wrapping_sub(last_tsc) > 160_000_000 {
+                if !dragging && now.wrapping_sub(last_tsc) > 1_500_000_000 { // 160_000_000
                     last_tsc = now;
                     CARET_ON = !CARET_ON;
                     if gui::shell_is_visible() && !dragging {

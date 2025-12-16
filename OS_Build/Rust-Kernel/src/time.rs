@@ -2,7 +2,7 @@
 
 use core::arch::asm;
 
-/// Read Time-Stamp Counter (cycles). Useful for crude profiling / pacing.
+/// read Time-Stamp Counter, useful for crude profiling/pacing
 #[inline]
 pub fn rdtsc() -> u64 {
     let lo: u32;
@@ -13,13 +13,15 @@ pub fn rdtsc() -> u64 {
     ((hi as u64) << 32) | (lo as u64)
 }
 
-/// Hint to the CPU while spinning.
+/// hint to the CPU while spinning
+/// *taptaptap* "erm... I'm busy-waiting here"
 #[inline]
 pub fn cpu_pause() {
     unsafe { asm!("pause", options(nomem, nostack, preserves_flags)); }
 }
 
-/// Crude busy-wait loop (cycle count is CPU-dependent).
+/// crude busy-wait loop (cycle count is CPU-dependent)
+/// weee...
 #[inline]
 pub fn spin(iter: u64) {
     for _ in 0..iter {
@@ -43,7 +45,7 @@ pub struct DateTime {
     pub minute: u8,
     pub second: u8,
 }
-
+// inline asm makes me want to understand why people drink :/
 #[inline]
 unsafe fn inb(port: u16) -> u8 {
     let value: u8;
@@ -63,7 +65,7 @@ fn bcd_to_bin(v: u8) -> u8 {
 
 #[inline]
 fn cmos_read(reg: u8) -> u8 {
-    // Disable NMI by setting bit 7.
+    // disable NMI by setting bit 7
     unsafe {
         outb(0x70, reg | 0x80);
         inb(0x71)
@@ -88,7 +90,7 @@ fn read_rtc_once() -> (u8, u8, u8, u8, u8, u8, u8) {
     (sec, min, hour, day, mon, yr, cen)
 }
 
-/// Read current date/time from the CMOS RTC.
+/// read current date/time from the CMOS RTC
 ///
 /// Notes:
 /// - RTC values may be local time or UTC depending on BIOS/firmware settings.
@@ -120,7 +122,7 @@ pub fn rtc_now() -> DateTime {
         if cen != 0 { cen = bcd_to_bin(cen); }
     }
 
-    // Convert 12h -> 24h if needed
+    // convert 12h -> 24h because that's cooler `\(°_°)/`
     if !is_24h {
         let pm = (hour & 0x80) != 0;
         hour &= 0x7F;
@@ -134,15 +136,15 @@ pub fn rtc_now() -> DateTime {
     let year: u16 = if cen != 0 {
         (cen as u16) * 100 + (yr as u16)
     } else {
-        // Best-effort fallback: assume 2000-2069 for 00-69, else 1970-1999.
+        // best effort fallback: assume 2000-2069 for 00-69, else 1970-1999
         if yr < 70 { 2000 + yr as u16 } else { 1900 + yr as u16 }
     };
 
     DateTime { year, month: mon, day, hour, minute: min, second: sec }
 }
 
-/// Format as ASCII: "MM/DD/YYYY HH:MM:SS" (19 chars).
-/// Returns number of bytes written.
+/// format as ASCII: "MM/DD/YYYY HH:MM:SS" (19 chars)
+/// returns number of bytes written
 pub fn format_datetime(buf: &mut [u8; 32], dt: DateTime) -> usize {
     let mut i = 0usize;
 

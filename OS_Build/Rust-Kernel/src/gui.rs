@@ -15,9 +15,7 @@ pub enum UiAction {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UiMode {
-    /// Full-screen login (no topbar/dock/shell)
     Login,
-    /// Desktop UI with dock + shell window
     Desktop,
 }
 
@@ -78,30 +76,30 @@ static mut CUR_X: i32 = 200;
 static mut CUR_Y: i32 = 200;
 static mut CUR_SAVE: [u32; CUR_W * CUR_H] = [0; CUR_W * CUR_H];
 
-// Cursor bitmap: 0=transparent, 1=black outline, 2=white fill (16x16)
+// cursor bitmap: 0=transparent, 1=black outline, 2=white fill (16x16) 256 bits
 const CUR_BLACK: u32 = 0x000000;
 const CUR_WHITE: u32 = 0xFFFFFF;
 
-// Put the cursor bitmap in `.data` for the same reason as the font table:
-// if `.rodata` isn't loaded by the boot pipeline, the cursor can disappear.
+// put the cursor bitmap in `.data` for the same reason as the font table:
+// if `.rodata` isn't loaded by the boot pipeline, the cursor can disappear
 #[link_section = ".data"]
 static CUR_BITMAP: [u8; CUR_W * CUR_H] = [
-    1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    1, 2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    1, 2, 2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    1, 2, 2, 2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    1, 2, 2, 2, 2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    1, 2, 2, 2, 2, 2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0,
-    1, 2, 2, 2, 2, 2, 2, 1, 1, 0, 0, 0, 0, 0, 0, 0,
-    1, 2, 2, 2, 2, 2, 2, 2, 1, 1, 0, 0, 0, 0, 0, 0,
-    1, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 0, 0, 0, 0, 0,
-    1, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0,
-    1, 2, 2, 2, 2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    1,2,1,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    1,2,2,1,0,0,0,0,0,0,0,0,0,0,0,0,
+    1,2,2,2,1,0,0,0,0,0,0,0,0,0,0,0,
+    1,2,2,2,2,1,0,0,0,0,0,0,0,0,0,0,
+    1,2,2,2,2,2,1,0,0,0,0,0,0,0,0,0,
+    1,2,2,2,2,2,2,1,0,0,0,0,0,0,0,0,
+    1,2,2,2,2,2,2,2,1,0,0,0,0,0,0,0,
+    1,2,2,2,2,2,2,2,2,1,0,0,0,0,0,0,
+    1,2,2,2,2,2,2,2,2,2,1,0,0,0,0,0,
+    1,2,2,2,2,2,1,1,1,1,1,1,0,0,0,0,
+    1,2,2,1,2,2,1,0,0,0,0,0,0,0,0,0,
+    1,1,1,0,1,2,2,1,0,0,0,0,0,0,0,0,
+    0,0,0,0,1,2,2,1,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,1,2,2,1,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,1,1,1,0,0,0,0,0,0,0,
 ];
 
 // ----------------------------------------------------------------------------
@@ -121,6 +119,7 @@ const ICON_FILL: u32    = 0xE5E7EB;
 const ICON_ACTIVE: u32  = 0x2563EB; // active highlight bg
 const ICON_HOVER: u32   = 0x1F2937; // hover highlight bg
 
+// icon data
 #[link_section = ".text"]
 static ICON_TERM: Icon16 = Icon16 {
     outline: [

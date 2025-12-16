@@ -8,7 +8,6 @@ use core::arch::asm;
 use core::fmt::{self, Write};
 use core::panic::PanicInfo;
 
-// Submodules
 mod serial;
 mod keyboard;
 mod mouse;
@@ -23,8 +22,6 @@ mod login;
 mod registry;
 mod regedit;
 mod time;
-
-// Filesystem + persistence
 mod heap;
 mod portio;
 mod crc32;
@@ -33,10 +30,9 @@ mod persist;
 mod fs;
 mod fs_cmds;
 
-// Re-export so other modules can `use crate::serial_write_str;`
 pub use serial::serial_write_str;
 
-// Serial fmt bridge
+// serial fmt bridge
 struct SerialWriter;
 impl Write for SerialWriter {
     fn write_str(&mut self, s: &str) -> fmt::Result {
@@ -69,23 +65,22 @@ fn panic(info: &PanicInfo) -> ! {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    // Stage2 may enter long mode with IF=1. Until we install an IDT/PIC,
-    // any hardware IRQ or CPU exception will triple-fault -> reboot loop.
+    // stage2 may enter long mode with IF=1. Until we install an IDT/PIC,
+    // any hardware IRQ or CPU exception will triple-fault -> reboot loop
     unsafe { asm!("cli", options(nomem, nostack, preserves_flags)); }
 
     serial::serial_init();
     serial_write_str("Othello kernel: _start reached (long mode).\n");
 
-    // Install a very small IDT that halts on *any* exception/IRQ.
-    // This stops reboot-loops and gives us a stable place to debug.
+    // this stops reboot-loops and gives a stable place to debug
     idt::init();
 
-    // Stage2 writes boot video info at physical 0x9000.
+    // stage2 writes boot video info at physical address 0x9000
     gui::init_from_bootloader(0x0000_9000 as *const framebuffer_driver::BootVideoInfoRaw);
 
     serial_write_str("KERNEL: after GUI init.\n");
 
-    // Initialize registry state (in-memory for now).
+    // initialize registry state (in-memory for now)
     registry::init();
 
     // Filesystem (RAM overlay) + persistent backing store (IDE tail log)
