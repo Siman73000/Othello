@@ -4,6 +4,7 @@
 use core::arch::asm;
 
 const PS2_STATUS: u16 = 0x64;
+const PS2_CMD: u16    = 0x64;
 const PS2_DATA: u16   = 0x60;
 
 #[inline]
@@ -11,6 +12,75 @@ unsafe fn inb(port: u16) -> u8 {
     let value: u8;
     asm!("in al, dx", out("al") value, in("dx") port, options(nomem, nostack, preserves_flags));
     value
+}
+
+#[inline]
+unsafe fn outb(port: u16, value: u8) {
+    asm!("out dx, al", in("dx") port, in("al") value, options(nomem, nostack, preserves_flags));
+}
+
+#[inline]
+fn wait_in_clear() {
+    for _ in 0..200_000 {
+        unsafe {
+            if inb(PS2_STATUS) & 0x02 == 0 {
+                return;
+            }
+        }
+    }
+}
+
+#[inline]
+fn wait_out_full() -> bool {
+    for _ in 0..200_000 {
+        unsafe {
+            if inb(PS2_STATUS) & 0x01 != 0 {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+#[inline]
+fn cmd(c: u8) {
+    wait_in_clear();
+    unsafe { outb(PS2_CMD, c); }
+}
+
+#[inline]
+fn data(d: u8) {
+    wait_in_clear();
+    unsafe { outb(PS2_DATA, d); }
+}
+
+#[inline]
+fn read() -> u8 {
+    if !wait_out_full() { 0 } else { unsafe { inb(PS2_DATA) } }
+}
+
+/// Initialize the PS/2 keyboard so we actually get scancodes.
+/// Many bootloaders/BIOSes leave it enabled, but not always (esp. with custom stage2).
+pub fn keyboard_init() {
+    unsafe {
+        // Enable keyboard interface
+        cmd(0xAE);
+
+        // Flush any stale bytes
+        for _ in 0..256 {
+            let st = inb(PS2_STATUS);
+            if st & 0x01 == 0 { break; }
+            let _ = inb(PS2_DATA);
+        }
+
+        // Enable scanning
+        data(0xF4);
+        // Read ACK (0xFA). Ignore anything else.
+        for _ in 0..20 {
+            let r = read();
+            if r == 0xFA { break; }
+        }
+    }
 }
 
 /// Poll controller for a keyboard scancode (filters mouse bytes via AUX bit).
@@ -68,7 +138,7 @@ pub fn scancode_to_ascii(sc: u8, shift: bool) -> Option<u8> {
         0x25 => if shift { b'K' } else { b'k' },
         0x26 => if shift { b'L' } else { b'l' },
         0x27 => if shift { b':' } else { b';' },
-        0x28 => if shift { b'"' } else { b'\'' },
+        0x28 => if shift { b'\"' } else { b'\'' },
 
         // zxcv
         0x2C => if shift { b'Z' } else { b'z' },

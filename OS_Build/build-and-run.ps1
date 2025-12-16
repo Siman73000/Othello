@@ -12,6 +12,7 @@ if (Test-Path $possibleQemuDir -PathType Container -ErrorAction SilentlyContinue
     }
 }
 
+
 # ------------------------------------------------------------------------------
 # Global config
 # ------------------------------------------------------------------------------
@@ -229,6 +230,18 @@ if (-not (Test-Path $kernelBin)) {
 
 Write-Host "==> Kernel binary: $kernelBin"
 Write-Host ""
+# -----------------------------
+# Generate kernel_sectors.inc for stage2
+# -----------------------------
+$sectorSize = 512
+$kernelLen = (Get-Item $kernelBin).Length
+$kernelSectors = [int][Math]::Ceiling($kernelLen / $sectorSize)
+
+$kernelInc = Join-Path $osBuildRoot "assembly\kernel_sectors.inc"
+"%define KERNEL_SECTORS $kernelSectors" | Set-Content -Encoding ASCII $kernelInc -NoNewline
+
+Write-Host "    KERNEL_SECTORS = $kernelSectors (wrote $kernelInc)"
+Write-Host ""
 
 # ------------------------------------------------------------------------------
 # 2. Assemble stage 1 (MBR)
@@ -259,7 +272,7 @@ if (-not (Test-Path $stage2Asm)) {
 }
 
 Write-Host "==> Assembling stage 2..."
-nasm -f bin $stage2Asm -o $stage2Bin
+nasm -I "$($osBuildRoot)\assembly\" -f bin $stage2Asm -o $stage2Bin
 
 if (-not (Test-Path $stage2Bin)) {
     throw "stage2.bin not created at $stage2Bin"
@@ -354,6 +367,7 @@ if (-not $script:QemuExePath) {
     $script:QemuExePath = "qemu-system-x86_64.exe"
 }
 
+# Tip: for debugging reboot loops, add "-no-reboot" (and optionally -d int,cpu_reset)
 $qemuArgs = @(
     "-m", "512M",
     "-machine", "pc,accel=tcg",

@@ -38,8 +38,7 @@ unsafe fn read_u64(p: *const u8) -> u64 { ptr::read_unaligned(p as *const u64) }
 
 #[inline]
 fn clamp_u32_to_byte(v: u32) -> u8 {
-    let v = v & 0xFF;
-    v as u8
+    (v & 0xFF) as u8
 }
 
 pub fn is_ready() -> bool {
@@ -59,11 +58,11 @@ pub unsafe fn init_from_bootinfo(info: *const BootVideoInfoRaw) -> bool {
     let bytespp = match bpp {
         24 => 3,
         32 => 4,
-        _ => 4,
+        _  => 4,
     };
 
     // Heuristics: A uses u32 fb at +6; B uses pitch:u16 at +6 and u64 fb at +8
-    let pitch_b = read_u16(base_ptr.add(6)) as usize;
+    let pitch_b   = read_u16(base_ptr.add(6)) as usize;
     let fb_addr_a = read_u32(base_ptr.add(6)) as usize;
     let fb_addr_b = read_u64(base_ptr.add(8)) as usize;
 
@@ -95,13 +94,15 @@ pub unsafe fn init_from_bootinfo(info: *const BootVideoInfoRaw) -> bool {
         bytes_per_pixel: bytespp,
     });
 
-    // Debug print (hex) without formatting machinery: print width/height/bpp/base low.
+    // Debug print (hex) without full formatting
     serial_write_str("FB: initialized. W=");
     serial_write_dec(w as u64);
     serial_write_str(" H=");
     serial_write_dec(h as u64);
     serial_write_str(" BPP=");
     serial_write_dec(bpp as u64);
+    serial_write_str(" PITCH=");
+    serial_write_dec(pit as u64);
     serial_write_str(" BASE=0x");
     serial_write_hex(base as u64);
     serial_write_str("\n");
@@ -109,7 +110,6 @@ pub unsafe fn init_from_bootinfo(info: *const BootVideoInfoRaw) -> bool {
 }
 
 fn serial_write_dec(mut v: u64) {
-    // minimal decimal writer
     let mut buf = [0u8; 20];
     let mut i = 0usize;
     if v == 0 {
@@ -128,10 +128,10 @@ fn serial_write_dec(mut v: u64) {
     }
 }
 
-fn serial_write_hex(mut v: u64) {
+fn serial_write_hex(v: u64) {
     let mut started = false;
     for i in (0..16).rev() {
-        let nib = ((v >> (i*4)) & 0xF) as u8;
+        let nib = ((v >> (i * 4)) & 0xF) as u8;
         if nib != 0 || started || i == 0 {
             started = true;
             let c = if nib < 10 { b'0' + nib } else { b'a' + (nib - 10) };
@@ -141,13 +141,9 @@ fn serial_write_hex(mut v: u64) {
 }
 
 #[inline]
-pub fn logical_width() -> usize  { unsafe { if let Some(f) = FB { f.width } else { 0 } } }
+pub fn width() -> usize  { unsafe { FB.map(|f| f.width).unwrap_or(0) } }
 #[inline]
-pub fn logical_height() -> usize { unsafe { if let Some(f) = FB { f.height } else { 0 } } }
-#[inline]
-pub fn width() -> usize { logical_width() }
-#[inline]
-pub fn height() -> usize { logical_height() }
+pub fn height() -> usize { unsafe { FB.map(|f| f.height).unwrap_or(0) } }
 
 #[inline]
 fn fb() -> Framebuffer {
@@ -166,8 +162,10 @@ pub fn set_pixel(x: usize, y: usize, color: u32) {
         let b = clamp_u32_to_byte(color);
 
         if f.bytes_per_pixel == 4 {
-            // Little-endian: BB GG RR 00
-            ptr::write_volatile(dst as *mut u32, (b as u32) | ((g as u32) << 8) | ((r as u32) << 16));
+            // Little-endian: BB GG RR AA
+            // Note: Some display paths treat the high byte as alpha. Use 0xFF to avoid "transparent" pixels.
+            let pix = (b as u32) | ((g as u32) << 8) | ((r as u32) << 16) | (0xFFu32 << 24);
+            ptr::write_volatile(dst as *mut u32, pix);
         } else {
             ptr::write_volatile(dst.add(0) as *mut u8, b);
             ptr::write_volatile(dst.add(1) as *mut u8, g);
@@ -195,7 +193,7 @@ pub fn get_pixel(x: usize, y: usize) -> u32 {
 }
 
 pub fn clear(color: u32) {
-    let (w, h) = (logical_width(), logical_height());
+    let (w, h) = (width(), height());
     fill_rect(0, 0, w, h, color);
 }
 
@@ -204,18 +202,27 @@ pub fn fill_rect(x: usize, y: usize, w: usize, h: usize, color: u32) {
         let f = fb();
         let x2 = (x + w).min(f.width);
         let y2 = (y + h).min(f.height);
-        for yy in y..y2 {
-            let row_off = yy * f.pitch;
-            for xx in x..x2 {
-                let off = row_off + xx * f.bytes_per_pixel;
-                let dst = f.base.add(off);
-                let r = clamp_u32_to_byte(color >> 16);
-                let g = clamp_u32_to_byte(color >> 8);
-                let b = clamp_u32_to_byte(color);
+        let r = clamp_u32_to_byte(color >> 16);
+        let g = clamp_u32_to_byte(color >> 8);
+        let b = clamp_u32_to_byte(color);
 
-                if f.bytes_per_pixel == 4 {
-                    ptr::write_volatile(dst as *mut u32, (b as u32) | ((g as u32) << 8) | ((r as u32) << 16));
-                } else {
+        if f.bytes_per_pixel == 4 {
+            // Little-endian: BB GG RR AA (AA=0xFF)
+            let pix = (b as u32) | ((g as u32) << 8) | ((r as u32) << 16) | (0xFFu32 << 24);
+            for yy in y..y2 {
+                let row_off = yy * f.pitch;
+                for xx in x..x2 {
+                    let off = row_off + xx * 4;
+                    let dst = f.base.add(off);
+                    ptr::write_volatile(dst as *mut u32, pix);
+                }
+            }
+        } else {
+            for yy in y..y2 {
+                let row_off = yy * f.pitch;
+                for xx in x..x2 {
+                    let off = row_off + xx * 3;
+                    let dst = f.base.add(off);
                     ptr::write_volatile(dst.add(0) as *mut u8, b);
                     ptr::write_volatile(dst.add(1) as *mut u8, g);
                     ptr::write_volatile(dst.add(2) as *mut u8, r);
@@ -226,7 +233,7 @@ pub fn fill_rect(x: usize, y: usize, w: usize, h: usize, color: u32) {
 }
 
 pub fn invert_rect(x: usize, y: usize, w: usize, h: usize) {
-    let (sw, sh) = (logical_width(), logical_height());
+    let (sw, sh) = (width(), height());
     if sw == 0 || sh == 0 { return; }
     let x2 = (x + w).min(sw);
     let y2 = (y + h).min(sh);
@@ -239,46 +246,56 @@ pub fn invert_rect(x: usize, y: usize, w: usize, h: usize) {
 }
 
 /// Overlap-safe rectangular move within the framebuffer (pixel coords).
+///
+/// This is used by the GUI for cheap window dragging (no full redraw needed).
 pub fn blit_move_rect(src_x: i32, src_y: i32, w: i32, h: i32, dst_x: i32, dst_y: i32) {
     unsafe {
         let f = fb();
         if w <= 0 || h <= 0 { return; }
 
-        // Clamp to framebuffer bounds for both src and dst.
-        let sx = src_x.clamp(0, f.width as i32);
-        let sy = src_y.clamp(0, f.height as i32);
-        let dx = dst_x.clamp(0, f.width as i32);
-        let dy = dst_y.clamp(0, f.height as i32);
-
+        // Clip both src and dst to framebuffer bounds, adjusting the other side equally.
+        let mut sx = src_x;
+        let mut sy = src_y;
+        let mut dx = dst_x;
+        let mut dy = dst_y;
         let mut ww = w;
         let mut hh = h;
 
-        ww = ww.min((f.width as i32 - sx).max(0));
-        ww = ww.min((f.width as i32 - dx).max(0));
-        hh = hh.min((f.height as i32 - sy).max(0));
-        hh = hh.min((f.height as i32 - dy).max(0));
+        // If src is negative, shift into range (and shift dst equally)
+        if sx < 0 { let sh = -sx; sx = 0; dx += sh; ww -= sh; }
+        if sy < 0 { let sh = -sy; sy = 0; dy += sh; hh -= sh; }
+        // If dst is negative, shift into range (and shift src equally)
+        if dx < 0 { let sh = -dx; dx = 0; sx += sh; ww -= sh; }
+        if dy < 0 { let sh = -dy; dy = 0; sy += sh; hh -= sh; }
+
+        let fw = f.width as i32;
+        let fh = f.height as i32;
+
+        // Clip right/bottom edges
+        ww = ww.min(fw - sx).min(fw - dx);
+        hh = hh.min(fh - sy).min(fh - dy);
 
         if ww <= 0 || hh <= 0 { return; }
 
-        let bpp = f.bytes_per_pixel;
-        let row_bytes = ww as usize * bpp;
+        let bpp = f.bytes_per_pixel as i32;
+        let row_bytes = (ww * bpp) as usize;
 
-        // Copy order: vertical direction only. ptr::copy is memmove-safe for overlap.
+        // Direction to avoid overwrite (memmove already handles overlap, but do it row-safe for caches)
         if dy > sy {
             for yy in (0..hh).rev() {
-                let src_off = (sy + yy) as usize * f.pitch + sx as usize * bpp;
-                let dst_off = (dy + yy) as usize * f.pitch + dx as usize * bpp;
-                let src = f.base.add(src_off);
-                let dst = f.base.add(dst_off);
-                core::ptr::copy(src, dst, row_bytes);
+                let src_off = (sy + yy) as usize * f.pitch + (sx as usize * f.bytes_per_pixel);
+                let dst_off = (dy + yy) as usize * f.pitch + (dx as usize * f.bytes_per_pixel);
+                let src_ptr = f.base.add(src_off);
+                let dst_ptr = f.base.add(dst_off);
+                ptr::copy(src_ptr, dst_ptr, row_bytes);
             }
         } else {
             for yy in 0..hh {
-                let src_off = (sy + yy) as usize * f.pitch + sx as usize * bpp;
-                let dst_off = (dy + yy) as usize * f.pitch + dx as usize * bpp;
-                let src = f.base.add(src_off);
-                let dst = f.base.add(dst_off);
-                core::ptr::copy(src, dst, row_bytes);
+                let src_off = (sy + yy) as usize * f.pitch + (sx as usize * f.bytes_per_pixel);
+                let dst_off = (dy + yy) as usize * f.pitch + (dx as usize * f.bytes_per_pixel);
+                let src_ptr = f.base.add(src_off);
+                let dst_ptr = f.base.add(dst_off);
+                ptr::copy(src_ptr, dst_ptr, row_bytes);
             }
         }
     }

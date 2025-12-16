@@ -57,11 +57,13 @@ pub fn mouse_init() {
         // enable aux device
         cmd(CMD_ENABLE_AUX);
 
-        // enable mouse IRQ in controller command byte
+        // We poll port 0x64/0x60 for mouse data instead of using IRQ12.
+        // If Stage2 left interrupts enabled and we don't have a full IRQ setup yet,
+        // enabling PS/2 IRQs can cause hard-to-debug reboot loops. Keep them off.
         cmd(CMD_READ_CCB);
         let mut ccb = read();
-        ccb |= 0x02; // enable mouse IRQ
-        ccb |= 0x20; // enable aux clock
+        ccb &= !0x03; // keep IRQs off (we poll)
+        ccb &= !(0x10 | 0x20); // ensure keyboard+mouse interfaces enabled
         cmd(CMD_WRITE_CCB);
         data(ccb);
 

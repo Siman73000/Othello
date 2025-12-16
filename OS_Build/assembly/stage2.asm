@@ -14,13 +14,17 @@
 [BITS 16]
 [ORG 0x8000]
 
+%include "kernel_sectors.inc"
 %define STAGE2_SECTORS    8
 %define KERNEL_LBA_START  (1 + STAGE2_SECTORS)
-%define KERNEL_SECTORS    128
-
+%ifndef KERNEL_SECTORS
+%define KERNEL_SECTORS    256
+%endif
 %define KERNEL_LOAD_SEG   0x2000
 %define KERNEL_LOAD_OFF   0x0000
 %define KERNEL_LOAD_PHYS  0x0000000000020000
+
+%define KERNEL_READ_CHUNK  16    ; sectors per INT13h AH=42h call (keeps buffers <64KiB)
 
 %define CODE_SEG      0x08
 %define DATA_SEG      0x10
@@ -97,20 +101,36 @@ load_kernel_lba:
     xor ax, ax
     mov ds, ax
 
-    ; Fill in the Disk Address Packet
+    ; Fill in the Disk Address Packet (DAP)
     mov byte [dap.size], 16
     mov byte [dap.reserved], 0
-
-    mov word [dap.sector_count], KERNEL_SECTORS
     mov word [dap.buf_off],      KERNEL_LOAD_OFF
-    mov word [dap.buf_seg],      KERNEL_LOAD_SEG
+
+    ; Destination starts at KERNEL_LOAD_SEG:0000
+    mov ax, KERNEL_LOAD_SEG
+    mov es, ax
 
     mov dword [dap.lba_low],  KERNEL_LBA_START
     mov dword [dap.lba_high], 0
 
-    ; Progress message
+    ; Progress message (may not show in VBE graphics, but harmless)
     mov si, msg_load_kernel
     call bios_print_string
+
+    mov cx, KERNEL_SECTORS          ; remaining sectors
+
+.load_loop:
+    cmp cx, 0
+    je  .success
+
+    ; ax = min(cx, KERNEL_READ_CHUNK)
+    mov ax, cx
+    cmp ax, KERNEL_READ_CHUNK
+    jbe .count_ok
+    mov ax, KERNEL_READ_CHUNK
+.count_ok:
+    mov word [dap.sector_count], ax
+    mov word [dap.buf_seg],      es
 
     ; DS:SI must point to DAP
     mov si, dap
@@ -118,11 +138,26 @@ load_kernel_lba:
     ; DL = BIOS drive number
     mov dl, [boot_drive]
 
-    mov ah, 0x42                ; extended read
+    mov ah, 0x42                    ; extended read
     int 0x13
-    jc  .error                  ; CF set on error
+    jc  .error                      ; CF set on error
 
-    ; Success
+    ; Advance LBA by ax sectors (32-bit low)
+    add word [dap.lba_low], ax
+    adc word [dap.lba_low+2], 0
+
+    ; Advance destination segment by ax*512 bytes = ax*32 paragraphs
+    mov bx, ax
+    shl bx, 5
+    mov dx, es
+    add dx, bx
+    mov es, dx
+
+    ; remaining -= ax
+    sub cx, ax
+    jmp .load_loop
+
+.success:
     mov si, msg_kernel_ok
     call bios_print_string
 
@@ -134,6 +169,10 @@ load_kernel_lba:
 .error:
     ; Save BIOS status code in AH for debugging
     mov [disk_status], ah
+
+    ; Switch to text mode so the error is visible (VBE graphics won't show teletype)
+    mov ax, 0x0003
+    int 0x10
 
     mov si, msg_kernel_fail
     call bios_print_string
@@ -333,6 +372,10 @@ set_video_mode_and_bootinfo:
     mov [BOOTVIDEO_ADDR + 10], ax        ; high dword = 0
     mov [BOOTVIDEO_ADDR + 12], ax
 
+    ; Store pitch (BytesPerScanLine)
+    mov ax, [VBE_MODE_INFO_ADDR + 0x10]      ; BytesPerScanLine (u16)
+    mov [BOOTVIDEO_ADDR + 14], ax
+
     jmp .done
 
 .fallback_vga:
@@ -353,18 +396,17 @@ set_video_mode_and_bootinfo:
     mov [BOOTVIDEO_ADDR + 4], ax
 
     ; framebuffer_addr = 0x000A0000 (u64)
-    
-    mov ax, 0xA000
+    mov ax, 0x0000
     mov [BOOTVIDEO_ADDR + 6], ax   ; low word
-    xor ax, ax
+    mov ax, 0x000A
     mov [BOOTVIDEO_ADDR + 8], ax   ; high word of low dword
+    xor ax, ax
     mov [BOOTVIDEO_ADDR + 10], ax  ; high dword = 0
     mov [BOOTVIDEO_ADDR + 12], ax
-    ; Store pitch (BytesPerScanLine) so Rust doesn't have to guess
-    mov ax, [VBE_MODE_INFO_ADDR + 0x10]      ; BytesPerScanLine
+
+    ; pitch = 320 bytes/scanline in Mode 13h
+    mov ax, 320
     mov [BOOTVIDEO_ADDR + 14], ax
-
-
 .done:
     pop es
     pop di

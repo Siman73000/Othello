@@ -1,204 +1,635 @@
 #![allow(dead_code)]
+
 use core::arch::asm;
 
-use crate::{framebuffer_driver as fb, gui, keyboard, mouse, net};
+use crate::{framebuffer_driver as fb, gui, keyboard, login, mouse, net, regedit, time};
+use crate::serial_write_str;
 
-const MAX_LINE: usize = 128;
-const MAX_LINES: usize = 64;
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AppState {
+    Login,
+    Terminal,
+    Regedit,
+}
 
-static mut LINES: [[u8; MAX_LINE]; MAX_LINES] = [[0; MAX_LINE]; MAX_LINES];
-static mut LENS: [usize; MAX_LINES] = [0; MAX_LINES];
-static mut LINE_COUNT: usize = 0;
+static mut APP: AppState = AppState::Login;
 
-static mut INBUF: [u8; MAX_LINE] = [0; MAX_LINE];
+fn set_app(app: AppState) {
+    // Don't allow entering terminal/regedit without an authenticated session.
+    if (app == AppState::Terminal || app == AppState::Regedit) && !login::is_logged_in() {
+        unsafe { APP = AppState::Login; }
+        gui::set_ui_mode(gui::UiMode::Login);
+        gui::set_shell_visible(false);
+        login::reset();
+        login::render_fullscreen();
+        return;
+    }
+
+    unsafe { APP = app; }
+    match app {
+        AppState::Login => {
+            gui::set_ui_mode(gui::UiMode::Login);
+            gui::set_shell_visible(false);
+            login::reset();
+            login::render_fullscreen();
+        }
+        AppState::Terminal => {
+            gui::set_ui_mode(gui::UiMode::Desktop);
+            gui::set_shell_visible(true);
+            gui::set_shell_maximized(true);
+            gui::set_shell_title("Terminal");
+        }
+        AppState::Regedit => {
+            gui::set_ui_mode(gui::UiMode::Desktop);
+            gui::set_shell_visible(true);
+            gui::set_shell_maximized(true);
+            gui::set_shell_title("Registry");
+            regedit::reset();
+        }
+    }
+    render_active_full();
+}
+
+fn render_active_full() {
+    unsafe {
+        match APP {
+            AppState::Login => login::render_fullscreen(),
+            AppState::Terminal => render_terminal_full(),
+            AppState::Regedit => regedit::render(),
+        }
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Minimal, direct-to-framebuffer terminal
+// -----------------------------------------------------------------------------
+//
+// The previous “full” terminal stored a large scrollback buffer in static arrays.
+// On some boot paging setups, touching large .bss regions can trigger a fault
+// (and with our current IDT handler, that looks like the system “freezes”).
+//
+// This implementation keeps state tiny and draws lines directly into the shell
+// content area, with a simple software scroll.
+
+const FG: u32 = gui::SHELL_FG_COLOR;
+const BG: u32 = gui::SHELL_BG_COLOR;
+const DIM: u32 = 0x94A3B8;
+const ERR: u32 = 0xF87171;
+const OK: u32  = 0x34D399;
+
+const STATUS_H: i32 = 20;
+const PAD: i32 = 8;
+const CH_W: i32 = 8;
+const CH_H: i32 = 16;
+
+static mut TERM_X: i32 = 0;
+static mut TERM_Y0: i32 = 0;
+static mut TERM_W: i32 = 0;
+static mut TERM_H: i32 = 0;
+static mut TERM_Y: i32 = 0;
+
+static mut INBUF: [u8; 160] = [0; 160];
 static mut INLEN: usize = 0;
-
+static mut CARET: usize = 0;
 static mut CARET_ON: bool = true;
-static mut LAST_TSC: u64 = 0;
 
-#[inline]
-fn rdtsc() -> u64 {
-    let lo: u32;
-    let hi: u32;
-    unsafe { asm!("rdtsc", out("eax") lo, out("edx") hi, options(nomem, nostack, preserves_flags)); }
-    ((hi as u64) << 32) | (lo as u64)
+fn layout() {
+    unsafe {
+        let x = gui::shell_content_left();
+        let y = gui::shell_content_top();
+        let w = gui::shell_content_w();
+        let h = gui::shell_content_h();
+
+        TERM_X = x + PAD;
+        TERM_Y0 = y + STATUS_H + PAD;
+        TERM_W = (w - PAD * 2).max(0);
+        TERM_H = (h - STATUS_H - PAD * 2).max(0);
+        TERM_Y = TERM_Y0;
+    }
 }
 
-fn push_line(s: &[u8]) {
+
+
+fn sync_layout_preserve() {
     unsafe {
-        if LINE_COUNT < MAX_LINES {
-            let i = LINE_COUNT;
-            let n = s.len().min(MAX_LINE);
-            LINES[i][..n].copy_from_slice(&s[..n]);
-            LENS[i] = n;
-            LINE_COUNT += 1;
+        // Preserve current cursor position relative to the text region while
+        // the window is moved by blitting pixels in gui::ui_handle_mouse().
+        let old_y0 = TERM_Y0;
+        let old_y  = TERM_Y;
+
+        let x = gui::shell_content_left();
+        let y = gui::shell_content_top();
+        let w = gui::shell_content_w();
+        let h = gui::shell_content_h();
+
+        TERM_X = x + PAD;
+        TERM_Y0 = y + STATUS_H + PAD;
+        TERM_W = (w - PAD * 2).max(0);
+        TERM_H = (h - STATUS_H - PAD * 2).max(0);
+
+        let dy = TERM_Y0 - old_y0;
+        TERM_Y = old_y + dy;
+
+        if TERM_H <= 0 {
+            TERM_Y = TERM_Y0;
         } else {
-            // scroll up
-            for i in 1..MAX_LINES {
-                LINES[i-1] = LINES[i];
-                LENS[i-1] = LENS[i];
-            }
-            let n = s.len().min(MAX_LINE);
-            LINES[MAX_LINES-1][..n].copy_from_slice(&s[..n]);
-            LENS[MAX_LINES-1] = n;
+            let miny = TERM_Y0;
+            let maxy = TERM_Y0 + TERM_H - CH_H;
+            TERM_Y = TERM_Y.clamp(miny, maxy.max(miny));
         }
     }
 }
+#[inline]
+fn clear_rect(x: i32, y: i32, w: i32, h: i32, c: u32) {
+    if w <= 0 || h <= 0 { return; }
+    fb::fill_rect(x.max(0) as usize, y.max(0) as usize, w.max(0) as usize, h.max(0) as usize, c);
+}
 
-fn clear_lines() {
+fn draw_status_bar() {
+    if !gui::shell_is_visible() { return; }
+    let x = gui::shell_content_left();
+    let y = gui::shell_content_top();
+    let w = gui::shell_content_w();
+    if w <= 0 { return; }
+    gui::begin_paint();
+    clear_rect(x, y, w, STATUS_H, 0x0B1220);
+
+    // "Terminal - <user>" (if logged in)
+    let mut line = [0u8; 64];
+    let mut n = 0usize;
+    let base = b"Terminal";
+    line[..base.len()].copy_from_slice(base);
+    n += base.len();
+    if login::is_logged_in() {
+        let sep = b" - ";
+        if n + sep.len() < line.len() {
+            line[n..n + sep.len()].copy_from_slice(sep);
+            n += sep.len();
+        }
+        let u = login::current_user_bytes();
+        let take = u.len().min(line.len().saturating_sub(n));
+        line[n..n + take].copy_from_slice(&u[..take]);
+        n += take;
+    } else {
+        let s = b" (locked)";
+        let take = s.len().min(line.len().saturating_sub(n));
+        line[n..n + take].copy_from_slice(&s[..take]);
+        n += take;
+    }
+
+    draw_bytes_line_clip_nocursor(x + PAD, y + 2, &line[..n], 0xE5E7EB, 0x0B1220, x + w - PAD);
+    gui::end_paint();
+}
+
+fn term_clear() {
+    if !gui::shell_is_visible() { return; }
     unsafe {
-        LINE_COUNT = 0;
-        for i in 0..MAX_LINES { LENS[i] = 0; }
+        clear_rect(TERM_X, TERM_Y0, TERM_W, TERM_H, BG);
+        TERM_Y = TERM_Y0;
     }
 }
 
-fn draw_prompt_and_input() {
-    let fg = gui::SHELL_FG_COLOR;
-    let bg = gui::SHELL_BG_COLOR;
-
-    let px = gui::shell_footer_x() + 4;
-    let py = gui::shell_footer_y() + 1;
-    // footer background
-    fb::fill_rect(gui::shell_footer_x() as usize, gui::shell_footer_y() as usize, gui::shell_footer_w() as usize, gui::shell_footer_h() as usize, bg);
-    gui::draw_text(px, py, "> ", fg, bg);
-
-    unsafe {
-        // draw input text
-        let mut x = px + 16;
-        for i in 0..INLEN {
-            let ch = INBUF[i];
-            let s = [ch];
-            gui::draw_text(x, py, core::str::from_utf8(&s).unwrap_or("?"), fg, bg);
-            x += 8;
+fn draw_bytes_line_clip_nocursor(x: i32, y: i32, bytes: &[u8], fg: u32, bg: u32, clip_r: i32) {
+    if bytes.is_empty() { return; }
+    let mut cx = x;
+    for &b in bytes {
+        if b == b'\n' { break; }
+        if cx + CH_W > clip_r { break; }
+        if b >= 0x20 && b <= 0x7E {
+            gui::draw_byte_nocursor(cx, y, b, fg, bg);
         }
+        cx += CH_W;
+    }
+}
+
+fn draw_bytes_line_nocursor(x: i32, y: i32, bytes: &[u8], fg: u32, bg: u32) {
+    let clip_r = x + unsafe { TERM_W };
+    draw_bytes_line_clip_nocursor(x, y, bytes, fg, bg, clip_r);
+}
+
+fn draw_bytes_line(x: i32, y: i32, bytes: &[u8], fg: u32, bg: u32) {
+    gui::begin_paint();
+    draw_bytes_line_nocursor(x, y, bytes, fg, bg);
+    gui::end_paint();
+}
+
+fn scroll_if_needed() {
+    unsafe {
+        if TERM_H <= 0 { return; }
+        if TERM_Y + CH_H <= TERM_Y0 + TERM_H { return; }
+
+        // Scroll up by one line inside the terminal text region.
+        fb::blit_move_rect(
+            TERM_X,
+            TERM_Y0 + CH_H,
+            TERM_W,
+            TERM_H - CH_H,
+            TERM_X,
+            TERM_Y0,
+        );
+
+        // Clear the last line.
+        clear_rect(TERM_X, TERM_Y0 + TERM_H - CH_H, TERM_W, CH_H, BG);
+
+        TERM_Y = TERM_Y0 + TERM_H - CH_H;
+    }
+}
+
+fn print_line(bytes: &[u8], fg: u32) {
+    if !gui::shell_is_visible() { return; }
+    unsafe {
+        scroll_if_needed();
+        draw_bytes_line(TERM_X, TERM_Y, bytes, fg, BG);
+        TERM_Y += CH_H;
+    }
+}
+
+fn print_prompt_and_input() {
+    if !gui::shell_is_visible() { return; }
+
+    let fx = gui::shell_footer_x();
+    let fy = gui::shell_footer_y();
+    let fw = gui::shell_footer_w();
+    let fh = gui::shell_footer_h();
+    if fw <= 0 || fh <= 0 { return; }
+
+    // Clear footer
+    gui::begin_paint();
+    clear_rect(fx, fy, fw, fh, BG);
+
+    // "$ " prompt
+    gui::draw_byte_nocursor(fx + 6, fy + 1, b'$', DIM, BG);
+    gui::draw_byte_nocursor(fx + 14, fy + 1, b' ', DIM, BG);
+
+    // input
+    let start_x = fx + 22;
+    unsafe {
+        let bytes = &INBUF[..INLEN];
+        let clip_r = fx + fw - 4;
+        draw_bytes_line_clip_nocursor(start_x, fy + 1, bytes, FG, BG, clip_r);
 
         // caret
         if CARET_ON {
-            fb::fill_rect(x as usize, (py + 2) as usize, 8, 12, 0x38BDF8);
-        }
-    }
-}
-
-fn redraw_terminal() {
-    gui::clear_shell_content();
-
-    let fg = gui::SHELL_FG_COLOR;
-    let bg = gui::SHELL_BG_COLOR;
-
-    let x0 = gui::shell_content_left();
-    let y0 = gui::shell_content_top();
-    let max_lines_vis = (gui::shell_content_h() as usize / 16).max(1);
-
-    unsafe {
-        let start = if LINE_COUNT > max_lines_vis { LINE_COUNT - max_lines_vis } else { 0 };
-        let mut y = y0;
-        for i in start..LINE_COUNT {
-            let n = LENS[i];
-            if n == 0 { y += 16; continue; }
-            // draw line
-            let bytes = &LINES[i][..n];
-            // split to printable
-            let mut cx = x0;
-            for &b in bytes {
-                if b == b'\n' || b == b'\r' { continue; }
-                let s = [b];
-                gui::draw_text(cx, y, core::str::from_utf8(&s).unwrap_or("?"), fg, bg);
-                cx += 8;
-                if cx >= x0 + gui::shell_content_w() - 8 { break; }
+            let cx = start_x + (CARET as i32) * CH_W;
+            if cx < fx + fw - 2 {
+                clear_rect(cx, fy + 2, 2, CH_H - 3, FG);
             }
-            y += 16;
-            if y >= y0 + gui::shell_content_h() - 16 { break; }
         }
     }
 
-    draw_prompt_and_input();
+    gui::end_paint();
 }
 
-fn exec_command(line: &[u8]) {
-    let s = core::str::from_utf8(line).unwrap_or("");
-    let s = s.trim();
-
-    if s.is_empty() { return; }
-
-    if s == "help" {
-        push_line(b"Commands: help, clear, echo <text>, net");
-    } else if s == "clear" {
-        clear_lines();
-    } else if s.starts_with("echo ") {
-        push_line(s[5..].as_bytes());
-    } else if s == "net" {
-        let r = net::net_scan();
-        for &d in r.devices {
-            push_line(d.as_bytes());
+fn buf_insert(ch: u8) {
+    unsafe {
+        if INLEN >= INBUF.len().saturating_sub(1) { return; }
+        if CARET > INLEN { CARET = INLEN; }
+        for i in (CARET..INLEN).rev() {
+            INBUF[i + 1] = INBUF[i];
         }
-    } else {
-        push_line(b"Unknown command. Try: help");
+        INBUF[CARET] = ch;
+        INLEN += 1;
+        CARET += 1;
     }
+}
+
+fn buf_backspace() {
+    unsafe {
+        if CARET == 0 || INLEN == 0 { return; }
+        for i in CARET..INLEN {
+            INBUF[i - 1] = INBUF[i];
+        }
+        INLEN -= 1;
+        CARET -= 1;
+    }
+}
+
+fn buf_delete() {
+    unsafe {
+        if CARET >= INLEN { return; }
+        for i in (CARET + 1)..INLEN {
+            INBUF[i - 1] = INBUF[i];
+        }
+        INLEN -= 1;
+    }
+}
+
+fn exec_command(line: &[u8]) -> Option<AppState> {
+    // trim leading spaces
+    let mut i = 0;
+    while i < line.len() && line[i] == b' ' { i += 1; }
+    let line = &line[i..];
+    if line.is_empty() { return None; }
+
+    // Split cmd + arg (first space)
+    let mut sp = 0;
+    while sp < line.len() && line[sp] != b' ' { sp += 1; }
+    let cmd = &line[..sp];
+    let mut arg = &line[sp..];
+    while !arg.is_empty() && arg[0] == b' ' { arg = &arg[1..]; }
+
+    match cmd {
+        b"help" => {
+            print_line(b"Commands: help, clear, net, about, login, reg, tsc, echo <text>", DIM);
+            print_line(b"Tips: click the dock 'T' to hide/show the shell.", DIM);
+            print_line(b"      click traffic lights to close/min/max.", DIM);
+            None
+        }
+        b"clear" => {
+            term_clear();
+            None
+        }
+        b"net" => {
+            let r = net::net_scan();
+            for &d in r.devices {
+                print_line(d.as_bytes(), FG);
+            }
+            None
+        }
+        b"about" => {
+            print_line(b"Othello OS - bare-metal Rust (WIP)", OK);
+            print_line(b"GUI: framebuffer + PS/2 mouse/keyboard (polled)", DIM);
+            None
+        }
+        b"login" => {
+            // Lock and return to the login screen.
+            login::lock();
+            Some(AppState::Login)
+        }
+        b"reg" => Some(AppState::Regedit),
+        b"tsc" => {
+            let t = time::rdtsc();
+            // Build "TSC: <num>" into a small stack buffer.
+            let mut buf = [0u8; 48];
+            let mut n = 0usize;
+            buf[n..n + 5].copy_from_slice(b"TSC: ");
+            n += 5;
+            n += write_u64_dec(&mut buf[n..], t);
+            print_line(&buf[..n], FG);
+            None
+        }
+        b"echo" => {
+            if arg.is_empty() { print_line(b"(echo) missing text", ERR); }
+            else { print_line(arg, FG); }
+            None
+        }
+        _ => {
+            print_line(b"Unknown command. Try: help", ERR);
+            None
+        }
+    }
+}
+
+fn write_u64_dec(out: &mut [u8], mut v: u64) -> usize {
+    let mut tmp = [0u8; 20];
+    let mut n = 0usize;
+    if v == 0 { if !out.is_empty() { out[0] = b'0'; return 1; } return 0; }
+    while v > 0 && n < tmp.len() {
+        tmp[n] = b'0' + (v % 10) as u8;
+        v /= 10;
+        n += 1;
+    }
+    let mut w = 0usize;
+    while n > 0 && w < out.len() {
+        n -= 1;
+        out[w] = tmp[n];
+        w += 1;
+    }
+    w
+}
+
+fn render_terminal_full() {
+    // Full repaint of terminal view (frame + status + terminal area + footer).
+    gui::clear_shell_content_and_frame();
+    layout();
+    draw_status_bar();
+    // Small banner.
+    if login::is_logged_in() {
+        print_line(b"Othello Terminal", OK);
+    } else {
+        print_line(b"Othello Terminal (locked)", ERR);
+    }
+    print_line(b"Type 'help'", DIM);
+    print_prompt_and_input();
 }
 
 pub fn run_shell() -> ! {
-    // Draw initial UI + a welcome
-    push_line(b"Othello Shell (mouse: drag title bar). Type 'help'.");
-    redraw_terminal();
+    serial_write_str("KERNEL: shell loop started.\n");
 
-    unsafe { LAST_TSC = rdtsc(); }
+    // Initial paint: boot into full-screen login screen
+    unsafe { APP = AppState::Login; }
+    gui::set_ui_mode(gui::UiMode::Login);
+    gui::set_shell_visible(false);
+    login::reset();
+    login::render_fullscreen();
 
     let mut shift = false;
+    let mut ext = false;
+    let mut last_tsc = time::rdtsc();
+    let mut was_dragging = false;
 
     loop {
-        // Process all mouse packets for smoothness
+        // Process all mouse packets (cursor + UI)
         let max_w = fb::width() as i32;
         let max_h = fb::height() as i32;
         while let Some(ms) = mouse::mouse_poll(max_w, max_h) {
             let act = gui::ui_handle_mouse(ms);
-            if act == gui::UiAction::ShellMoved {
-                // Repaint terminal elements inside window at new location (content + footer)
-                redraw_terminal();
+            match act {
+                gui::UiAction::ShellMoved => {
+                    // Window moved via blit. Only terminal needs geometry sync.
+                    unsafe {
+                        if APP == AppState::Terminal {
+                            sync_layout_preserve();
+                        }
+                    }
+                }
+                gui::UiAction::ShellVisibilityChanged => {
+                    if gui::shell_is_visible() {
+                        render_active_full();
+                    }
+                }
+                gui::UiAction::ShellResized => {
+                    if gui::shell_is_visible() {
+                        render_active_full();
+                    }
+                }
+                gui::UiAction::DockLaunch(icon) => {
+                    // Ensure shell is visible and then run a quick action.
+                    if gui::shell_is_visible() {
+                        match icon {
+                            1 => {
+                                // Network: show in terminal
+                                set_app(AppState::Terminal);
+                                print_line(b"[dock] net", DIM);
+                                let _ = exec_command(b"net");
+                                if !gui::shell_is_dragging() { print_prompt_and_input(); }
+                            }
+                            2 => {
+                                // Lock/Login
+                                login::lock();
+                                set_app(AppState::Login);
+                            }
+                            3 => {
+                                set_app(AppState::Terminal);
+                                print_line(b"[dock] about", DIM);
+                                let _ = exec_command(b"about");
+                                if !gui::shell_is_dragging() { print_prompt_and_input(); }
+                            }
+                            5 => {
+                                // Registry
+                                set_app(AppState::Regedit);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                _ => {}
             }
         }
 
-        // Keyboard
+        // Track drag transitions so we don't draw using stale cached layout.
+        let dragging = gui::shell_is_dragging();
+        if was_dragging && !dragging {
+            // Drag ended: for terminal, keep cached layout in sync.
+            unsafe {
+                if APP == AppState::Terminal {
+                    sync_layout_preserve();
+                    if gui::shell_is_visible() && !dragging {
+                        print_prompt_and_input();
+                    }
+                } else if gui::shell_is_visible() {
+                    // login/regedit: repaint to avoid artifacts
+                    render_active_full();
+                }
+            }
+        }
+        was_dragging = dragging;
+
+        // Always drain keyboard scancodes (even when the shell is hidden) so
+        // keyboard bytes can't clog the PS/2 output buffer and block mouse input.
         while let Some(sc) = keyboard::keyboard_poll_scancode() {
-            // shift make/break: 0x2A/0x36 down, 0xAA/0xB6 up
+            if sc == 0xE0 { ext = true; continue; }
+
+            // shift make/break
             if sc == 0x2A || sc == 0x36 { shift = true; continue; }
             if sc == 0xAA || sc == 0xB6 { shift = false; continue; }
+            // If we're on the desktop and the shell is hidden, still drain keyboard bytes.
+            // The PS/2 controller uses a shared output buffer; leaving a keyboard byte
+            // unread can block mouse packets and make the cursor appear frozen.
+            if gui::ui_mode() == gui::UiMode::Desktop && !gui::shell_is_visible() {
+                ext = false;
+                continue;
+            }
+
+            if ext {
+                ext = false;
+                if sc & 0x80 != 0 { continue; }
+                unsafe {
+                    match APP {
+                        AppState::Terminal => {
+                            match sc {
+                                0x4B => { if CARET > 0 { CARET -= 1; } }, // Left
+                                0x4D => { if CARET < INLEN { CARET += 1; } }, // Right
+                                0x47 => { CARET = 0; }, // Home
+                                0x4F => { CARET = INLEN; }, // End
+                                0x53 => { buf_delete(); }, // Delete
+                                _ => {}
+                            }
+                            if !dragging { print_prompt_and_input(); }
+                        }
+                        AppState::Login => {
+                            if login::handle_ext_scancode(sc) {
+                                login::render_fullscreen();
+                            }
+                        }
+                        AppState::Regedit => {
+                            if regedit::handle_ext_scancode(sc) {
+                                regedit::render();
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
 
             if let Some(ch) = keyboard::scancode_to_ascii(sc, shift) {
                 unsafe {
-                    match ch {
-                        b'\n' => {
-                            // commit
-                            push_line(&INBUF[..INLEN]);
-                            exec_command(&INBUF[..INLEN]);
+                    match APP {
+                        AppState::Login => {
+                            let (dirty, outcome) = login::handle_ascii(ch);
+                            if dirty { login::render_fullscreen(); }
+                            if let login::LoginOutcome::Success = outcome {
+                                // Successful auth -> desktop terminal
+                                set_app(AppState::Terminal);
+                            }
+                        }
+                        AppState::Regedit => {
+                            if regedit::handle_ascii(ch) {
+                                regedit::render();
+                            }
+                        }
+                        AppState::Terminal => match ch {
+                    b'\n' => {
+                        // Print the entered command as a terminal line and execute.
+                        let req = unsafe {
+                            let mut line = [0u8; 192];
+                            let mut n = 0usize;
+                            line[n..n + 2].copy_from_slice(b"$ ");
+                            n += 2;
+                            let take = INLEN.min(line.len().saturating_sub(n));
+                            line[n..n + take].copy_from_slice(&INBUF[..take]);
+                            n += take;
+                            print_line(&line[..n], FG);
+
+                            let req = exec_command(&INBUF[..INLEN]);
                             INLEN = 0;
-                            redraw_terminal();
+                            CARET = 0;
+                            req
+                        };
+
+                        if let Some(next) = req {
+                            set_app(next);
+                        } else if !gui::shell_is_dragging() {
+                            print_prompt_and_input();
                         }
-                        0x08 => {
-                            if INLEN > 0 {
-                                INLEN -= 1;
-                                draw_prompt_and_input();
-                            }
+                    }
+                    0x08 => { // backspace
+                        buf_backspace();
+                        if !gui::shell_is_dragging() { print_prompt_and_input(); }
+                    }
+                    b'\t' => {
+                        // For now: tab inserts spaces (simple)
+                        buf_insert(b' ');
+                        buf_insert(b' ');
+                        if !gui::shell_is_dragging() { print_prompt_and_input(); }
+                    }
+                    _ => {
+                        if ch >= 0x20 && ch <= 0x7E {
+                            buf_insert(ch);
+                            if !gui::shell_is_dragging() { print_prompt_and_input(); }
                         }
-                        _ => {
-                            if INLEN < MAX_LINE {
-                                INBUF[INLEN] = ch;
-                                INLEN += 1;
-                                draw_prompt_and_input();
-                            }
-                        }
+                    }
+                },
                     }
                 }
             }
         }
 
-        // caret blink (rough): toggle every ~200M cycles; tweak if needed
-        let now = rdtsc();
+        // caret blink
+        // Caret blink (terminal only)
         unsafe {
-            if now.wrapping_sub(LAST_TSC) > 200_000_000 {
-                LAST_TSC = now;
-                CARET_ON = !CARET_ON;
-                draw_prompt_and_input();
+            if APP == AppState::Terminal {
+                let now = time::rdtsc();
+                if !dragging && now.wrapping_sub(last_tsc) > 160_000_000 {
+                    last_tsc = now;
+                    CARET_ON = !CARET_ON;
+                    if gui::shell_is_visible() && !dragging {
+                        print_prompt_and_input();
+                    }
+                }
             }
         }
+
+        unsafe { asm!("pause", options(nomem, nostack, preserves_flags)); }
     }
 }
