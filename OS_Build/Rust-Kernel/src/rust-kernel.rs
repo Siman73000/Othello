@@ -15,6 +15,7 @@ mod idt;
 mod framebuffer_driver;
 mod font;
 mod gui;
+mod wallpaper;
 mod editor;
 mod shell;
 mod net;
@@ -105,6 +106,8 @@ pub extern "C" fn _start() -> ! {
     keyboard::keyboard_init();
     mouse::mouse_init();
 
+
+    net::init();
     serial_write_str("KERNEL: entering shell.\n");
     shell::run_shell()
 }

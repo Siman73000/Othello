@@ -1,5 +1,9 @@
 #![allow(dead_code)]
 
+extern crate alloc;
+
+use alloc::vec::Vec;
+
 use crate::{framebuffer_driver as fb, font, time};
 use crate::mouse::MouseState;
 use crate::serial_write_str;
@@ -66,6 +70,29 @@ static mut DOCK_ICONS: [Rect; DOCK_ICON_COUNT] = [Rect { x: 0, y: 0, w: 0, h: 0 
 
 // Mouse click edge detection
 static mut LAST_LEFT: bool = false;
+static mut LAST_RIGHT: bool = false;
+
+// -----------------------------------------------------------------------------
+// Desktop right-click UI: context menu + wallpaper picker
+// -----------------------------------------------------------------------------
+
+struct SavedRegion {
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    buf: Vec<u32>,
+}
+
+static mut CTX_OPEN: bool = false;
+static mut CTX_RECT: Rect = Rect { x: 0, y: 0, w: 0, h: 0 };
+static mut CTX_ITEM_BG: Rect = Rect { x: 0, y: 0, w: 0, h: 0 };
+static mut CTX_SAVE: Option<SavedRegion> = None;
+
+static mut PICKER_OPEN: bool = false;
+static mut PICKER_RECT: Rect = Rect { x: 0, y: 0, w: 0, h: 0 };
+static mut PICKER_CLOSE: Rect = Rect { x: 0, y: 0, w: 0, h: 0 };
+static mut PICKER_SAVE: Option<SavedRegion> = None;
 
  // Cursor state (software-drawn arrow with background save)
 const CUR_W: usize = 16;
@@ -607,20 +634,279 @@ fn draw_desktop() {
         let h = SCREEN_H.max(0) as usize;
         if w == 0 || h == 0 { return; }
 
-        // Gradient background
-        let den = (h.saturating_sub(1) as u32).max(1);
-        for y in 0..h {
-            let c = lerp_color(DESKTOP_BG_TOP, DESKTOP_BG_BOT, y as u32, den);
-            fb::fill_rect(0, y, w, 1, c);
-        }
+        // Wallpaper background
+        crate::wallpaper::draw_fullscreen();
 
-        // Top bar
+// Top bar
         fb::fill_rect(0, 0, w, 32, TOPBAR_BG);
         fb::fill_rect(0, 31, w, 1, ACCENT);
         draw_text_nocursor(12, 8, "O t h e l l o  O S", 0xE5E7EB, TOPBAR_BG);
 
         // Bottom taskbar (icons + clock)
         paint_taskbar_and_dock();
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Desktop right-click UI helpers
+// -----------------------------------------------------------------------------
+
+#[inline]
+fn save_region(r: Rect) -> Option<SavedRegion> {
+    unsafe {
+        let Some(r) = clip_to_screen(r) else { return None; };
+        let w = r.w.max(0) as usize;
+        let h = r.h.max(0) as usize;
+        if w == 0 || h == 0 { return None; }
+
+        let mut buf = Vec::with_capacity(w.saturating_mul(h));
+        for yy in 0..h {
+            for xx in 0..w {
+                buf.push(fb::get_pixel((r.x as usize) + xx, (r.y as usize) + yy));
+            }
+        }
+        Some(SavedRegion { x: r.x, y: r.y, w: r.w, h: r.h, buf })
+    }
+}
+
+#[inline]
+fn restore_region(s: &SavedRegion) {
+    let w = s.w.max(0) as usize;
+    let h = s.h.max(0) as usize;
+    if w == 0 || h == 0 { return; }
+    for yy in 0..h {
+        for xx in 0..w {
+            let idx = yy * w + xx;
+            if idx >= s.buf.len() { return; }
+            fb::set_pixel((s.x as usize) + xx, (s.y as usize) + yy, s.buf[idx]);
+        }
+    }
+}
+
+fn close_context_menu() {
+    unsafe {
+        if !CTX_OPEN { return; }
+        begin_paint();
+        if let Some(s) = CTX_SAVE.take() {
+            restore_region(&s);
+        }
+        CTX_OPEN = false;
+        end_paint();
+    }
+}
+
+fn draw_context_menu() {
+    unsafe {
+        let r = CTX_RECT;
+        // Border + body
+        fill_round_rect(r.x, r.y, r.w, r.h, 10, 0x334155);
+        fill_round_rect(r.x + 1, r.y + 1, r.w - 2, r.h - 2, 10, 0x0F172A);
+
+        // Single item
+        let item = CTX_ITEM_BG;
+        fill_round_rect(item.x, item.y, item.w, item.h, 8, 0x111827);
+        draw_text_nocursor(item.x + 10, item.y + 5, "Desktop background", 0xE5E7EB, 0x111827);
+    }
+}
+
+fn open_context_menu_at(px: i32, py: i32) {
+    unsafe {
+        // Only one overlay at a time.
+        if PICKER_OPEN { close_wallpaper_picker(); }
+        if CTX_OPEN { close_context_menu(); }
+
+        let sw = SCREEN_W;
+        let sh = SCREEN_H;
+        if sw <= 0 || sh <= 0 { return; }
+
+        let menu_w: i32 = 240;
+        let menu_h: i32 = 44;
+        let mut x = px;
+        let mut y = py;
+
+        // Keep on-screen
+        if x + menu_w > sw { x = (sw - menu_w - 2).max(2); }
+        if y + menu_h > sh { y = (sh - menu_h - 2).max(2); }
+        if x < 2 { x = 2; }
+        if y < 2 { y = 2; }
+
+        CTX_RECT = Rect { x, y, w: menu_w, h: menu_h };
+        CTX_ITEM_BG = Rect { x: x + 8, y: y + 8, w: menu_w - 16, h: 28 };
+
+        begin_paint();
+        CTX_SAVE = save_region(CTX_RECT);
+        CTX_OPEN = true;
+        draw_context_menu();
+        end_paint();
+    }
+}
+
+fn close_wallpaper_picker() {
+    unsafe {
+        if !PICKER_OPEN { return; }
+        begin_paint();
+        if let Some(s) = PICKER_SAVE.take() {
+            restore_region(&s);
+        }
+        PICKER_OPEN = false;
+        end_paint();
+    }
+}
+
+fn draw_wallpaper_preview(dst_x: i32, dst_y: i32, pw: i32, ph: i32, idx: usize) {
+    if pw <= 0 || ph <= 0 { return; }
+    let pw_u = pw as usize;
+    let ph_u = ph as usize;
+    let wp = &crate::wallpaper::WALLPAPERS[idx];
+    for yy in 0..ph_u {
+        for xx in 0..pw_u {
+            let c = wp.sample(xx, yy, pw_u, ph_u);
+            fb::set_pixel((dst_x as usize) + xx, (dst_y as usize) + yy, c);
+        }
+    }
+}
+
+fn draw_wallpaper_picker() {
+    unsafe {
+        let r = PICKER_RECT;
+        // Shadow + border + body
+        fill_round_rect(r.x + 6, r.y + 8, r.w, r.h, 14, 0x000000);
+        fill_round_rect(r.x, r.y, r.w, r.h, 14, 0x334155);
+        fill_round_rect(r.x + 1, r.y + 1, r.w - 2, r.h - 2, 14, 0x0F172A);
+
+        // Header
+        fill_round_rect(r.x + 1, r.y + 1, r.w - 2, 36, 14, 0x111827);
+        fb::fill_rect((r.x + 1) as usize, (r.y + 35) as usize, (r.w - 2) as usize, 1, 0x334155);
+        draw_text_nocursor(r.x + 14, r.y + 11, "Desktop background", 0xF3F4F6, 0x111827);
+
+        // Close button
+        let c = PICKER_CLOSE;
+        fill_round_rect(c.x, c.y, c.w, c.h, 8, 0xEF4444);
+        draw_text_nocursor(c.x + 6, c.y + 2, "X", 0xFFFFFF, 0xEF4444);
+
+        // List
+        let n = crate::wallpaper::count();
+        let cur = crate::wallpaper::current_index();
+        let list_x = r.x + 12;
+        let list_w = r.w - 24;
+        let mut y = r.y + 48;
+        let row_h: i32 = 62;
+
+        for i in 0..n {
+            let row = Rect { x: list_x, y, w: list_w, h: row_h - 8 };
+
+            // Row background (highlight current)
+            let bg = if i == cur { 0x1F2937 } else { 0x0F172A };
+            fill_round_rect(row.x, row.y, row.w, row.h, 12, bg);
+            fb::fill_rect(row.x.max(0) as usize, row.y.max(0) as usize, row.w.max(0) as usize, 1, 0x334155);
+
+            // Preview box
+            let pv_w = 96;
+            let pv_h = 54;
+            let pv_x = row.x + 10;
+            let pv_y = row.y + (row.h - pv_h) / 2;
+            fill_round_rect(pv_x, pv_y, pv_w, pv_h, 10, 0x334155);
+            fill_round_rect(pv_x + 1, pv_y + 1, pv_w - 2, pv_h - 2, 10, 0x0B1220);
+            draw_wallpaper_preview(pv_x + 2, pv_y + 2, pv_w - 4, pv_h - 4, i);
+
+            // Name
+            draw_text_nocursor(pv_x + pv_w + 12, row.y + 18, crate::wallpaper::WALLPAPERS[i].name(), 0xE5E7EB, bg);
+            if i == cur {
+                draw_text_nocursor(pv_x + pv_w + 12, row.y + 34, "(current)", 0x94A3B8, bg);
+            }
+
+            y += row_h;
+        }
+    }
+}
+
+fn open_wallpaper_picker() {
+    unsafe {
+        if PICKER_OPEN { return; }
+        if CTX_OPEN { close_context_menu(); }
+
+        let sw = SCREEN_W;
+        let sh = SCREEN_H;
+        if sw <= 0 || sh <= 0 { return; }
+
+        let n = crate::wallpaper::count().max(1);
+        let row_h: i32 = 62;
+        let mut w: i32 = 540;
+        w = w.min(sw - 40).max(280);
+        let mut h: i32 = 48 + (n as i32) * row_h + 18;
+        h = h.min(sh - 40).max(180);
+
+        let x = (sw - w) / 2;
+        let y = (sh - h) / 2;
+        PICKER_RECT = Rect { x, y, w, h };
+        PICKER_CLOSE = Rect { x: x + w - 30, y: y + 8, w: 20, h: 20 };
+
+        begin_paint();
+        PICKER_SAVE = save_region(PICKER_RECT);
+        PICKER_OPEN = true;
+        draw_wallpaper_picker();
+        end_paint();
+    }
+}
+
+fn picker_hit_wallpaper(px: i32, py: i32) -> Option<usize> {
+    unsafe {
+        if !PICKER_OPEN { return None; }
+        let r = PICKER_RECT;
+        let n = crate::wallpaper::count();
+        if n == 0 { return None; }
+
+        let list_x0 = r.x + 12;
+        let list_x1 = r.x + r.w - 12;
+        let list_y0 = r.y + 48;
+        let row_h: i32 = 62;
+
+        if px < list_x0 || px >= list_x1 || py < list_y0 { return None; }
+        let idx = ((py - list_y0) / row_h) as isize;
+        if idx < 0 { return None; }
+        let i = idx as usize;
+        if i >= n { None } else { Some(i) }
+    }
+}
+
+fn repaint_visible_desktop_after_wallpaper_change() {
+    unsafe {
+        begin_paint();
+
+        let sw = SCREEN_W;
+        let sh = SCREEN_H;
+        if sw <= 0 || sh <= 0 {
+            end_paint();
+            return;
+        }
+
+        if !SHELL_VISIBLE {
+            draw_desktop();
+            end_paint();
+            return;
+        }
+
+        let win = shell_paint_rect(SHELL_OUTER);
+        // Top
+        if win.y > 0 {
+            draw_desktop_region(Rect { x: 0, y: 0, w: sw, h: win.y });
+        }
+        // Bottom
+        let by = win.y + win.h;
+        if by < sh {
+            draw_desktop_region(Rect { x: 0, y: by, w: sw, h: sh - by });
+        }
+        // Left
+        if win.x > 0 {
+            draw_desktop_region(Rect { x: 0, y: win.y, w: win.x, h: win.h });
+        }
+        // Right
+        let rx = win.x + win.w;
+        if rx < sw {
+            draw_desktop_region(Rect { x: rx, y: win.y, w: sw - rx, h: win.h });
+        }
+
+        end_paint();
     }
 }
 
@@ -719,17 +1005,13 @@ fn draw_desktop_region(r: Rect) {
         let sh = SCREEN_H as usize;
         if sw == 0 || sh == 0 { return; }
 
-        // Gradient background only for the affected scanlines
-        let den = (sh.saturating_sub(1) as u32).max(1);
+        // Wallpaper background only for the affected region
         let y0 = r.y.max(0) as usize;
         let y1 = (r.y + r.h).min(SCREEN_H) as usize;
         let x0 = r.x.max(0) as usize;
         let w  = r.w.max(0) as usize;
 
-        for y in y0..y1 {
-            let c = lerp_color(DESKTOP_BG_TOP, DESKTOP_BG_BOT, y as u32, den);
-            fb::fill_rect(x0, y, w, 1, c);
-        }
+        crate::wallpaper::draw_region(x0, y0, w, y1.saturating_sub(y0));
 
         // Topbar overlap
         if r.y < 32 {
@@ -823,6 +1105,10 @@ pub fn ui_handle_mouse(ms: MouseState) -> UiAction {
         let left_release = !ms.left && LAST_LEFT;
         LAST_LEFT = ms.left;
 
+        let right_edge = ms.right && !LAST_RIGHT;
+        let _right_release = !ms.right && LAST_RIGHT;
+        LAST_RIGHT = ms.right;
+
         // In full-screen login mode, we only want the software cursor to move.
         // No window chrome, no dock hit-tests.
         if UI_MODE == UiMode::Login {
@@ -835,7 +1121,77 @@ pub fn ui_handle_mouse(ms: MouseState) -> UiAction {
             DRAG_ACTIVE = false;
         }
 
-	        let act = 'act: loop {
+	    let act = 'act: loop {
+            // ----------------------------------------------------------------
+            // Overlays: wallpaper picker + desktop context menu
+            // ----------------------------------------------------------------
+            if PICKER_OPEN {
+                if left_edge {
+                    if PICKER_CLOSE.contains(ms.x, ms.y) {
+                        close_wallpaper_picker();
+                        break UiAction::None;
+                    }
+                    if let Some(i) = picker_hit_wallpaper(ms.x, ms.y) {
+                        close_wallpaper_picker();
+                        crate::wallpaper::set(i);
+                        repaint_visible_desktop_after_wallpaper_change();
+                        break UiAction::None;
+                    }
+                    if !PICKER_RECT.contains(ms.x, ms.y) {
+                        close_wallpaper_picker();
+                        break UiAction::None;
+                    }
+                }
+
+                // Right-click anywhere outside closes the picker.
+                if right_edge && !PICKER_RECT.contains(ms.x, ms.y) {
+                    close_wallpaper_picker();
+                    break UiAction::None;
+                }
+
+                break UiAction::None;
+            }
+
+            if CTX_OPEN {
+                if left_edge {
+                    if CTX_ITEM_BG.contains(ms.x, ms.y) {
+                        close_context_menu();
+                        open_wallpaper_picker();
+                        break UiAction::None;
+                    }
+                    if !CTX_RECT.contains(ms.x, ms.y) {
+                        close_context_menu();
+                        break UiAction::None;
+                    }
+                }
+
+                // Reposition menu on right-click elsewhere.
+                if right_edge && !CTX_RECT.contains(ms.x, ms.y) {
+                    close_context_menu();
+                    recompute_dock_layout();
+                    let on_desktop = ms.y >= 32
+                        && !DOCK_RECT.contains(ms.x, ms.y)
+                        && !(SHELL_VISIBLE && shell_paint_rect(SHELL_OUTER).contains(ms.x, ms.y));
+                    if on_desktop {
+                        open_context_menu_at(ms.x, ms.y);
+                    }
+                    break UiAction::None;
+                }
+
+                break UiAction::None;
+            }
+
+            // Open context menu on desktop right-click.
+            if right_edge {
+                recompute_dock_layout();
+                let on_desktop = ms.y >= 32
+                    && !DOCK_RECT.contains(ms.x, ms.y)
+                    && !(SHELL_VISIBLE && shell_paint_rect(SHELL_OUTER).contains(ms.x, ms.y));
+                if on_desktop {
+                    open_context_menu_at(ms.x, ms.y);
+                    break UiAction::None;
+                }
+            }
             // ----------------------------------------------------------------
             // Window traffic lights (close/min/max) - paint on click
             // ----------------------------------------------------------------

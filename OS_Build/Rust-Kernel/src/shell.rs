@@ -409,7 +409,7 @@ fn exec_command(line: &[u8]) -> Option<AppState> {
 
     match cmd {
         b"help" => {
-            print_line(b"Commands: help, clear, net, about, login, reg, tsc, echo <text>, pwd, cd, ls, cat, mkdir, touch, rm, write, append, sync, persist", DIM);
+            print_line(b"Commands: help, clear, net, ipconfig, dhcp, ipset, ping, about, login, reg, edit, tsc, echo <text>, pwd, cd, ls, cat, mkdir, touch, rm, write, append, sync, persist", DIM);
             print_line(b"Tips: click the dock 'T' to hide/show the shell.", DIM);
             print_line(b"      click traffic lights to close/min/max.", DIM);
             None
@@ -419,10 +419,40 @@ fn exec_command(line: &[u8]) -> Option<AppState> {
             None
         }
         b"net" => {
+            // Initialize NIC (RTL8139) if needed, then list detected adapters.
+            net::init();
             let r = net::net_scan();
-            for &d in r.devices {
-                print_line(d.as_bytes(), FG);
+            if r.devices.is_empty() {
+                print_line(b"No network adapters detected.", ERR);
+            } else {
+                print_line(b"Network adapters:", OK);
+                for &d in r.devices {
+                    print_line(d.as_bytes(), FG);
+                }
             }
+            None
+        }
+        b"ipconfig" | b"ifconfig" => {
+            cmd_ipconfig();
+            None
+        }
+        b"dhcp" => {
+            net::init();
+            match net::dhcp_acquire() {
+                Ok(()) => print_line(b"DHCP: bound", OK),
+                Err(net::DhcpError::NoNic) => print_line(b"DHCP: no NIC detected", ERR),
+                Err(net::DhcpError::Timeout) => print_line(b"DHCP: timeout (no offer/ack)", ERR),
+                Err(net::DhcpError::Malformed) => print_line(b"DHCP: malformed reply", ERR),
+                Err(net::DhcpError::Nack) => print_line(b"DHCP: NACK (request denied)", ERR),
+            }
+            None
+        }
+        b"ipset" => {
+            cmd_ipset(arg);
+            None
+        }
+        b"ping" => {
+            cmd_ping(arg);
             None
         }
         b"about" => {
@@ -475,6 +505,257 @@ fn write_u64_dec(out: &mut [u8], mut v: u64) -> usize {
         w += 1;
     }
     w
+}
+
+
+// -----------------------------------------------------------------------------
+// Networking commands (ipconfig / dhcp / ipset / ping)
+// -----------------------------------------------------------------------------
+
+fn write_u8_dec(out: &mut [u8], v: u8) -> usize {
+    if out.is_empty() { return 0; }
+    if v >= 100 {
+        if out.len() < 3 { return 0; }
+        out[0] = b'0' + (v / 100);
+        out[1] = b'0' + ((v / 10) % 10);
+        out[2] = b'0' + (v % 10);
+        3
+    } else if v >= 10 {
+        if out.len() < 2 { return 0; }
+        out[0] = b'0' + (v / 10);
+        out[1] = b'0' + (v % 10);
+        2
+    } else {
+        out[0] = b'0' + v;
+        1
+    }
+}
+
+fn write_ipv4(out: &mut [u8], ip: [u8; 4]) -> usize {
+    let mut n = 0usize;
+    for (i, oct) in ip.iter().enumerate() {
+        if i != 0 {
+            if n >= out.len() { break; }
+            out[n] = b'.';
+            n += 1;
+        }
+        n += write_u8_dec(&mut out[n..], *oct);
+        if n >= out.len() { break; }
+    }
+    n
+}
+
+fn write_hex2(out: &mut [u8], v: u8) -> usize {
+    if out.len() < 2 { return 0; }
+    let hi = (v >> 4) & 0xF;
+    let lo = v & 0xF;
+    out[0] = if hi < 10 { b'0' + hi } else { b'a' + (hi - 10) };
+    out[1] = if lo < 10 { b'0' + lo } else { b'a' + (lo - 10) };
+    2
+}
+
+fn write_mac(out: &mut [u8], mac: [u8; 6]) -> usize {
+    let mut n = 0usize;
+    for (i, b) in mac.iter().enumerate() {
+        if i != 0 {
+            if n >= out.len() { break; }
+            out[n] = b'-';
+            n += 1;
+        }
+        if n + 2 > out.len() { break; }
+        n += write_hex2(&mut out[n..], *b);
+    }
+    n
+}
+
+fn parse_ipv4_str(s: &str) -> Option<[u8; 4]> {
+    let mut out = [0u8; 4];
+    let mut idx = 0usize;
+    for part in s.split('.') {
+        if idx >= 4 { return None; }
+        if part.is_empty() { return None; }
+        let mut v: u16 = 0;
+        for c in part.bytes() {
+            if c < b'0' || c > b'9' { return None; }
+            v = v * 10 + (c - b'0') as u16;
+            if v > 255 { return None; }
+        }
+        out[idx] = v as u8;
+        idx += 1;
+    }
+    if idx != 4 { return None; }
+    Some(out)
+}
+
+fn print_kv(prefix: &[u8], value: &[u8], fg: u32) {
+    let mut buf = [0u8; 192];
+    let mut n = 0usize;
+    let take_p = prefix.len().min(buf.len());
+    buf[..take_p].copy_from_slice(&prefix[..take_p]);
+    n += take_p;
+    let take_v = value.len().min(buf.len().saturating_sub(n));
+    buf[n..n + take_v].copy_from_slice(&value[..take_v]);
+    n += take_v;
+    print_line(&buf[..n], fg);
+}
+
+fn print_kv_ipv4(prefix: &[u8], ip: [u8; 4], fg: u32) {
+    let mut buf = [0u8; 192];
+    let mut n = 0usize;
+    let take_p = prefix.len().min(buf.len());
+    buf[..take_p].copy_from_slice(&prefix[..take_p]);
+    n += take_p;
+    n += write_ipv4(&mut buf[n..], ip);
+    print_line(&buf[..n], fg);
+}
+
+fn cmd_ipconfig() {
+    print_line(b"Windows IP Configuration", OK);
+
+    let r = net::net_scan();
+    if !r.devices.is_empty() {
+        print_line(b"", FG);
+        print_line(b"Adapters:", DIM);
+        for &d in r.devices {
+            print_line(d.as_bytes(), FG);
+        }
+    }
+
+    let cfg = net::config();
+    print_line(b"", FG);
+    print_kv(b"   DHCP Enabled . . . . . . . . . . : ", if cfg.dhcp_bound { b"Yes" } else { b"No" }, FG);
+    print_kv_ipv4(b"   IPv4 Address. . . . . . . . . . . : ", cfg.ip, FG);
+    print_kv_ipv4(b"   Subnet Mask . . . . . . . . . . . : ", cfg.mask, FG);
+    print_kv_ipv4(b"   Default Gateway . . . . . . . . . : ", cfg.gateway, FG);
+    print_kv_ipv4(b"   DNS Servers . . . . . . . . . . . : ", cfg.dns, FG);
+    if cfg.dhcp_bound {
+        print_kv_ipv4(b"   DHCP Server . . . . . . . . . . . : ", cfg.server_id, FG);
+    }
+
+    if let Some(mac) = net::mac() {
+        let mut line = [0u8; 80];
+        let mut n = 0usize;
+        let key = b"   Physical Address. . . . . . . . . : ";
+        line[n..n + key.len()].copy_from_slice(key);
+        n += key.len();
+        n += write_mac(&mut line[n..], mac);
+        print_line(&line[..n], FG);
+    }
+}
+
+fn cmd_ipset(arg: &[u8]) {
+    let arg_s = match core::str::from_utf8(arg) {
+        Ok(s) => s,
+        Err(_) => { print_line(b"ipset: invalid UTF-8 args", ERR); return; }
+    };
+
+    let mut it = arg_s.split_whitespace();
+    let first = match it.next() {
+        Some(s) => s,
+        None => {
+            print_line(b"Usage: ipset <ip> <mask> <gw> [dns]", DIM);
+            print_line(b"   or: ipset qemu", DIM);
+            return;
+        }
+    };
+
+    if first == "qemu" {
+        // QEMU user-mode NAT defaults: IP 10.0.2.15/24, GW 10.0.2.2, DNS 10.0.2.3
+        net::set_static_config([10,0,2,15], [255,255,255,0], [10,0,2,2], [10,0,2,3]);
+        print_line(b"ipset: qemu defaults applied", OK);
+        return;
+    }
+
+    let mask_s = it.next();
+    let gw_s = it.next();
+    let dns_s = it.next();
+
+    if mask_s.is_none() || gw_s.is_none() {
+        print_line(b"Usage: ipset <ip> <mask> <gw> [dns]", DIM);
+        print_line(b"Example: ipset 10.0.2.15 255.255.255.0 10.0.2.2 10.0.2.3", DIM);
+        return;
+    }
+
+    let ip = match parse_ipv4_str(first) { Some(v) => v, None => { print_line(b"ipset: invalid IP", ERR); return; } };
+    let mask = match parse_ipv4_str(mask_s.unwrap()) { Some(v) => v, None => { print_line(b"ipset: invalid mask", ERR); return; } };
+    let gw = match parse_ipv4_str(gw_s.unwrap()) { Some(v) => v, None => { print_line(b"ipset: invalid gateway", ERR); return; } };
+    let dns = if let Some(d) = dns_s {
+        match parse_ipv4_str(d) { Some(v) => v, None => { print_line(b"ipset: invalid dns", ERR); return; } }
+    } else {
+        [0,0,0,0]
+    };
+
+    net::set_static_config(ip, mask, gw, dns);
+    print_line(b"ipset: ok", OK);
+}
+
+fn cmd_ping(arg: &[u8]) {
+    let arg_s = match core::str::from_utf8(arg) {
+        Ok(s) => s,
+        Err(_) => { print_line(b"ping: invalid UTF-8 args", ERR); return; }
+    };
+
+    let mut it = arg_s.split_whitespace();
+    let ip_s = match it.next() {
+        Some(s) => s,
+        None => { print_line(b"Usage: ping <ip> [count]", DIM); return; }
+    };
+
+    let dst = match parse_ipv4_str(ip_s) {
+        Some(v) => v,
+        None => { print_line(b"ping: invalid IP", ERR); return; }
+    };
+
+    let count = it.next().and_then(|c| c.parse::<u32>().ok()).unwrap_or(4).min(20);
+
+    let mut banner = [0u8; 64];
+    let mut n = 0usize;
+    banner[n..n+5].copy_from_slice(b"PING ");
+    n += 5;
+    n += write_ipv4(&mut banner[n..], dst);
+    print_line(&banner[..n], OK);
+
+    let mut seq: u16 = 1;
+    for _ in 0..count {
+        match net::ping_once(dst, seq) {
+            Ok(r) => {
+                let mut line = [0u8; 96];
+                let mut p = 0usize;
+                line[p..p+11].copy_from_slice(b"Reply from ");
+                p += 11;
+                p += write_ipv4(&mut line[p..], dst);
+
+                line[p..p+6].copy_from_slice(b": seq=");
+                p += 6;
+                p += write_u64_dec(&mut line[p..], r.seq as u64);
+
+                line[p..p+5].copy_from_slice(b" ttl=");
+                p += 5;
+                p += write_u64_dec(&mut line[p..], r.ttl as u64);
+
+                line[p..p+5].copy_from_slice(b" tsc=");
+                p += 5;
+                p += write_u64_dec(&mut line[p..], r.rtt_tsc);
+
+                print_line(&line[..p], FG);
+            }
+            Err(net::PingError::Timeout) => {
+                print_line(b"Request timed out.", ERR);
+            }
+            Err(net::PingError::NotConfigured) => {
+                print_line(b"ping: no IPv4 config (run dhcp or ipset)", ERR);
+                return;
+            }
+            Err(net::PingError::ArpTimeout) => {
+                print_line(b"ping: ARP timeout", ERR);
+            }
+            Err(_) => {
+                print_line(b"ping: failed", ERR);
+            }
+        }
+        seq = seq.wrapping_add(1);
+        time::spin(2_000_000);
+    }
 }
 
 fn render_terminal_full() {

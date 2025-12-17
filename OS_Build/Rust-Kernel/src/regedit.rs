@@ -137,7 +137,7 @@ pub fn render() {
     let y0 = gui::shell_content_top();
     let w  = gui::shell_content_w();
 
-    let mut x = x0 + 12;
+    let x = x0 + 12;
     let mut y = y0 + 10;
 
     draw_str(x, y, b"Registry Editor (Read Only)", HDR, BG);
