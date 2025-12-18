@@ -2,7 +2,7 @@
 
 use core::arch::asm;
 
-use crate::{framebuffer_driver as fb, gui, keyboard, login, mouse, net, regedit, editor, fs, time};
+use crate::{framebuffer_driver as fb, gui, keyboard, login, mouse, net, regedit, editor, browser, fs, time};
 use crate::serial_write_str;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -11,6 +11,7 @@ enum AppState {
     Terminal,
     Regedit,
     Editor,
+    Browser,
 }
 
 
@@ -23,6 +24,7 @@ pub fn active_taskbar_index() -> u8 {
             AppState::Login => 2,
             AppState::Regedit => 5,
             AppState::Editor => 4,
+            AppState::Browser => 6,
         }
     }
 }
@@ -31,7 +33,7 @@ static mut APP: AppState = AppState::Login;
 
 fn set_app(app: AppState) {
     // Don't allow entering terminal/regedit without an authenticated session.
-    if (app == AppState::Terminal || app == AppState::Regedit || app == AppState::Editor) && !login::is_logged_in() {
+    if (app == AppState::Terminal || app == AppState::Regedit || app == AppState::Editor || app == AppState::Browser) && !login::is_logged_in() {
         unsafe { APP = AppState::Login; }
         gui::set_ui_mode(gui::UiMode::Login);
         gui::set_shell_visible(false);
@@ -67,6 +69,13 @@ fn set_app(app: AppState) {
             gui::set_shell_maximized(true);
             gui::set_shell_title("Text Editor");
         }
+        AppState::Browser => {
+            gui::set_ui_mode(gui::UiMode::Desktop);
+            gui::set_shell_visible(true);
+            gui::set_shell_maximized(true);
+            gui::set_shell_title("Browser");
+            crate::browser::reset();
+        }
     }
     render_active_full();
 }
@@ -78,6 +87,7 @@ fn render_active_full() {
             AppState::Terminal => render_terminal_full(),
             AppState::Regedit => regedit::render(),
             AppState::Editor => editor::render(),
+            AppState::Browser => crate::browser::render(),
         }
     }
 }
@@ -831,21 +841,17 @@ pub fn run_shell() -> ! {
                                 login::lock();
                                 set_app(AppState::Login);
                             }
-                            3 => {
-                                set_app(AppState::Terminal);
-                                print_line(b"[dock] about", DIM);
-                                let _ = exec_command(b"about");
-                                if !gui::shell_is_dragging() { print_prompt_and_input(); }
+                            3 | 6 => {
+                                // Browser (taskbar web icon)
+                                set_app(AppState::Browser);
                             }
                             4 => {
                                 // Text Editor: open /home/user/readme.txt
                                 let cwd = crate::fs_cmds::cwd();
                                 if let Ok(p) = fs::normalize_path(&cwd, "/home/user/readme.txt") {
                                     editor::open_abs(&p);
-                                } else {
-                                    editor::open_abs("/home/user/readme.txt");
+                                    set_app(AppState::Editor);
                                 }
-                                set_app(AppState::Editor);
                             }
                             5 => {
                                 // Registry
@@ -855,6 +861,7 @@ pub fn run_shell() -> ! {
                         }
                     }
                 }
+
                 _ => {}
             }
         }
@@ -928,7 +935,12 @@ pub fn run_shell() -> ! {
                                 editor::render();
                             }
                         }
-                    }
+                                            AppState::Browser => {
+                            if crate::browser::handle_ext_scancode(sc) {
+                                crate::browser::render();
+                            }
+                        }
+}
                 }
                 continue;
             }
@@ -964,7 +976,12 @@ pub fn run_shell() -> ! {
                                 }
                             }
                         }
-                        AppState::Terminal => match ch {
+                                                AppState::Browser => {
+                            if crate::browser::handle_char(ch, ctrl) {
+                                crate::browser::render();
+                            }
+                        }
+AppState::Terminal => match ch {
                     b'\n' => {
                         // Print the entered command as a terminal line and execute.
                         let req = unsafe {

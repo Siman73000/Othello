@@ -17,6 +17,7 @@ mod font;
 mod gui;
 mod wallpaper;
 mod editor;
+mod browser;
 mod shell;
 mod net;
 mod login;

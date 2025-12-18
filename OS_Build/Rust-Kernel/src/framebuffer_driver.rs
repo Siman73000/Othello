@@ -61,16 +61,26 @@ pub unsafe fn init_from_bootinfo(info: *const BootVideoInfoRaw) -> bool {
         _  => 4,
     };
 
-    // Heuristics: A uses u32 fb at +6; B uses pitch:u16 at +6 and u64 fb at +8
-    let pitch_b   = read_u16(base_ptr.add(6)) as usize;
-    let fb_addr_a = read_u32(base_ptr.add(6)) as usize;
-    let fb_addr_b = read_u64(base_ptr.add(8)) as usize;
+    // Heuristics:
+//  - Layout C (current stage2.asm): u64 fb at +6 and pitch at +14
+//  - Layout B (older): pitch:u16 at +6 and u64 fb at +8
+//  - Layout A (oldest): u32 fb at +6 (pitch implied)
+let fb_addr_c = read_u64(base_ptr.add(6)) as usize;
+let pitch_c   = read_u16(base_ptr.add(14)) as usize;
 
-    let (pitch, fb_addr) = if pitch_b != 0 && pitch_b < 32768 && fb_addr_b != 0 {
-        (pitch_b, fb_addr_b)
-    } else {
-        (width.saturating_mul(bytespp), fb_addr_a)
-    };
+let pitch_b   = read_u16(base_ptr.add(6)) as usize;
+let fb_addr_a = read_u32(base_ptr.add(6)) as usize;
+let fb_addr_b = read_u64(base_ptr.add(8)) as usize;
+
+let (pitch, fb_addr) = if fb_addr_c != 0 && pitch_c != 0 && pitch_c < 65535 {
+    (pitch_c, fb_addr_c)
+} else if pitch_b != 0 && pitch_b < 32768 && fb_addr_b != 0 {
+    (pitch_b, fb_addr_b)
+} else {
+    // Layout A fallback: pitch = width * bytespp
+    ((width * bytespp) as usize, fb_addr_a)
+};
+
 
     // Plausibility checks
     let plausible = width >= 320 && width <= 8192

@@ -18,6 +18,11 @@ use core::str;
 use crate::portio::{inb, inl, inw, outb, outl, outw};
 use crate::time;
 
+pub mod dns;
+pub mod tcp;
+pub mod http;
+pub mod tls;
+
 // -----------------------------------------------------------------------------
 // Public surface
 // -----------------------------------------------------------------------------
@@ -185,8 +190,12 @@ impl Rtl8139 {
     }
 
     fn send_frame(&mut self, dst: [u8; 6], ethertype: u16, payload: &[u8]) -> bool {
+        // Ethernet minimum frame size is 60 bytes (excluding 4-byte CRC).
+        // If we transmit runt frames, some backends/emulations will drop them,
+        // which breaks ARP and small TCP packets (e.g. SYN is 58 bytes).
         let total = 14 + payload.len();
-        if total > TX_BUF_SIZE {
+        let tx_total = core::cmp::max(total, 60);
+        if tx_total > TX_BUF_SIZE {
             return false;
         }
 
@@ -199,10 +208,14 @@ impl Rtl8139 {
             buf[6..12].copy_from_slice(&self.mac);
             buf[12..14].copy_from_slice(&ethertype.to_be_bytes());
             buf[14..14 + payload.len()].copy_from_slice(payload);
+            if tx_total > total {
+                // Zero padding to satisfy minimum frame size.
+                for b in buf[14 + payload.len()..tx_total].iter_mut() { *b = 0; }
+            }
 
             let phys = (&TX_BUFFERS[idx] as *const _ as u64) as u32;
             outl(self.io + TSAD0 + (idx as u16) * 4, phys);
-            outl(self.io + TSD0 + (idx as u16) * 4, total as u32);
+            outl(self.io + TSD0 + (idx as u16) * 4, tx_total as u32);
         }
 
         unsafe { NET.stats.tx_packets = NET.stats.tx_packets.wrapping_add(1); }

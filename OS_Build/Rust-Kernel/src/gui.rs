@@ -64,7 +64,7 @@ const TASKBAR_BG: u32 = 0x0B1220;
 const TASKBAR_TOP: u32 = 0x1F2A3A;
 
 // Dock layout (computed from screen)
-const DOCK_ICON_COUNT: usize = 6;
+const DOCK_ICON_COUNT: usize = 7;
 static mut DOCK_RECT: Rect = Rect { x: 0, y: 0, w: 0, h: 0 };
 static mut DOCK_ICONS: [Rect; DOCK_ICON_COUNT] = [Rect { x: 0, y: 0, w: 0, h: 0 }; DOCK_ICON_COUNT];
 
@@ -208,6 +208,19 @@ static ICON_FILES: Icon16 = Icon16 {
 };
 
 #[link_section = ".text"]
+#[link_section = ".text"]
+static ICON_WEB: Icon16 = Icon16 {
+    outline: [
+        0x0000, 0x07E0, 0x1FF8, 0x3C3C, 0x781E, 0x700E, 0x700E, 0x700E,
+        0x700E, 0x700E, 0x700E, 0x781E, 0x3C3C, 0x1FF8, 0x07E0, 0x0000,
+    ],
+    fill: [
+        0x0000, 0x0000, 0x07E0, 0x0FF0, 0x1FF8, 0x1A58, 0x1A58, 0x1FF8,
+        0x1FF8, 0x1A58, 0x1A58, 0x1FF8, 0x0FF0, 0x07E0, 0x0000, 0x0000,
+    ],
+};
+
+#[link_section = ".text"]
 static ICON_REG: Icon16 = Icon16 {
     outline: [
         0x0000, 0x3CF0, 0x2080, 0x2080, 0x3CF0, 0x0F00, 0x0800, 0x0800,
@@ -247,6 +260,8 @@ fn icon_for_index(i: usize) -> &'static Icon16 {
         2 => &ICON_LOCK,
         3 => &ICON_ABOUT,
         4 => &ICON_FILES,
+        5 => &ICON_REG,
+        6 => &ICON_WEB,
         _ => &ICON_REG,
     }
 }
