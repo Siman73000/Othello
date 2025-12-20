@@ -245,14 +245,19 @@ impl Rtl8139 {
                 return None;
             }
 
-            // RTL8139 often reports length including CRC; subtract 4 if possible.
-            let frame_len = len_raw.saturating_sub(4).max(14);
+            // The reported length may or may not include a trailing 4-byte CRC/FCS.
+            // Never blindly subtract 4; doing so truncates valid IPv4 payload and
+            // breaks TCP/HTTP parsing.
+            //
+            // Strategy:
+            // 1) Copy the reported length (clamped).
+            // 2) Infer the "real" L2 length using EtherType + IPv4 total-length.
 
             // Frame begins right after header.
             let start = off + 4;
 
             // Copy linearly out of the RX buffer using the overflow area.
-            let copy_len = frame_len.min(RX_SCRATCH.len());
+            let mut copy_len = len_raw.min(RX_SCRATCH.len());
             if start + copy_len <= ring.len() {
                 RX_SCRATCH[..copy_len].copy_from_slice(&ring[start..start + copy_len]);
             } else {
@@ -264,6 +269,9 @@ impl Rtl8139 {
                     j += 1;
                 }
             }
+
+            // Infer actual L2 length (exclude FCS if present).
+            copy_len = infer_l2_len(&RX_SCRATCH[..copy_len]).unwrap_or(copy_len);
 
             // Advance rx ptr: header(4) + len_raw, aligned to dword, wrap at 8KiB.
             self.advance_rx(align4(4 + len_raw));
@@ -292,6 +300,34 @@ impl Rtl8139 {
 
 #[inline(always)]
 fn align4(x: usize) -> usize { (x + 3) & !3 }
+
+// Infer the actual Ethernet frame length (excluding optional FCS) by looking at
+// EtherType and (for IPv4) the total length field.
+fn infer_l2_len(frame: &[u8]) -> Option<usize> {
+    if frame.len() < 14 { return None; }
+
+    // VLAN tagged frames have EtherType 0x8100 at bytes 12..14, with real type at 16..18.
+    let mut l2 = 14usize;
+    let mut ethertype = u16::from_be_bytes([frame[12], frame[13]]);
+    if ethertype == 0x8100 {
+        if frame.len() < 18 { return None; }
+        ethertype = u16::from_be_bytes([frame[16], frame[17]]);
+        l2 = 18;
+    }
+
+    match ethertype {
+        0x0800 => { // IPv4
+            if frame.len() < l2 + 20 { return None; }
+            let ihl = (frame[l2] & 0x0F) as usize;
+            if ihl < 5 { return None; }
+            let total = u16::from_be_bytes([frame[l2 + 2], frame[l2 + 3]]) as usize;
+            let want = l2 + total;
+            if want <= frame.len() { Some(want) } else { None }
+        }
+        0x0806 => Some(l2 + 28), // ARP
+        _ => None,
+    }
+}
 
 // -----------------------------------------------------------------------------
 // Global net state

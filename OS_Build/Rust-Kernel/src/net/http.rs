@@ -7,8 +7,7 @@
 //!
 //! HTTPS:
 //! - Native TLS is not implemented in-kernel yet.
-//! - For now, `https://` URLs are fetched via the optional host-side HTTPS proxy
-//!   at 10.0.2.2:8080 (QEMU user networking default). See tools/https_proxy.py.
+//! - `https://` URLs will return UnsupportedScheme until a TLS backend is added.
 
 extern crate alloc;
 
@@ -46,9 +45,6 @@ pub struct HttpResponse {
     pub location: Option<String>,
     pub body: Vec<u8>,
 }
-
-const HTTPS_PROXY_IP: [u8; 4] = [10, 0, 2, 2];
-const HTTPS_PROXY_PORT: u16 = 8080;
 
 #[derive(Clone, Debug)]
 struct UrlParts {
@@ -111,22 +107,6 @@ fn find_header<'a>(headers: &'a str, name: &str) -> Option<&'a str> {
         }
     }
     None
-}
-
-fn url_encode(s: &str) -> String {
-    let mut out = String::new();
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
-            _ => {
-                out.push('%');
-                const HEX: &[u8; 16] = b"0123456789ABCDEF";
-                out.push(HEX[(b >> 4) as usize] as char);
-                out.push(HEX[(b & 0xF) as usize] as char);
-            }
-        }
-    }
-    out
 }
 
 fn decode_chunked(body: &[u8]) -> Result<Vec<u8>, HttpError> {
@@ -240,27 +220,6 @@ fn http_get_direct(parts: &UrlParts, max_bytes: usize) -> Result<HttpResponse, H
     parse_http_response(&raw)
 }
 
-fn http_get_via_https_proxy(url: &str, max_bytes: usize) -> Result<HttpResponse, HttpError> {
-    let ip = HTTPS_PROXY_IP;
-    let mut s = tcp::TcpStream::connect(ip, HTTPS_PROXY_PORT, 10_000_000).map_err(HttpError::Tcp)?;
-
-    let q = url_encode(url);
-    let path = format!("/fetch?url={}", q);
-
-    let host = format!("{}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]);
-    let req = format!(
-        "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: OthelloBrowser/0.1\r\nAccept: */*\r\nConnection: close\r\n\r\n",
-        path,
-        host
-    );
-
-    s.write_all(req.as_bytes()).map_err(HttpError::Tcp)?;
-    let raw = s.read_to_end(max_bytes, 10_000_000).map_err(HttpError::Tcp)?;
-    let _ = s.close();
-
-    parse_http_response(&raw)
-}
-
 pub fn get(url: &str, max_bytes: usize) -> Result<HttpResponse, HttpError> {
     let mut cur = parse_url(url)?;
     let mut redirects = 0usize;
@@ -268,7 +227,7 @@ pub fn get(url: &str, max_bytes: usize) -> Result<HttpResponse, HttpError> {
     loop {
         let resp = match cur.scheme.as_str() {
             "http" => http_get_direct(&cur, max_bytes),
-            "https" => http_get_via_https_proxy(&cur.original, max_bytes),
+            "https" => Err(HttpError::UnsupportedScheme),
             _ => Err(HttpError::UnsupportedScheme),
         }?;
 

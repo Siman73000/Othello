@@ -466,14 +466,8 @@ fn exec_command(line: &[u8]) -> Option<AppState> {
             None
         }
         b"about" => {
-            print_line(b" ", OK);
-            print_line(b"Othello OS", OK);
-            print_line(b" ", OK);
-            print_line(b"Kernel Version - 1.0.1", DIM);
-            print_line(b"BIOS Version - 1.2.0", DIM);
-            print_line(b"Edition - Personal", DIM);
-            print_line(b" ", OK);
-            print_line(b"Developed by Simon Hamilton.", OK);
+            print_line(b"Othello OS - bare-metal Rust (WIP)", OK);
+            print_line(b"GUI: framebuffer + PS/2 mouse/keyboard (polled)", DIM);
             None
         }
         b"login" => {
@@ -626,7 +620,7 @@ fn print_kv_ipv4(prefix: &[u8], ip: [u8; 4], fg: u32) {
 }
 
 fn cmd_ipconfig() {
-    print_line(b" ", OK);
+    print_line(b"Windows IP Configuration", OK);
 
     let r = net::net_scan();
     if !r.devices.is_empty() {
