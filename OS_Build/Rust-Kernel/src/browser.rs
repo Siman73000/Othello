@@ -14,7 +14,7 @@ extern crate alloc;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-use crate::{gui, net};
+use crate::{gui, net, web};
 
 const MAX_URL: usize = 256;
 const MAX_FETCH: usize = 512 * 1024; // 512 KiB
@@ -264,14 +264,26 @@ fn navigate_current(push_hist: bool) {
             let ct = resp
                 .content_type
                 .unwrap_or_else(|| "application/octet-stream".to_string());
-            if ct.to_ascii_lowercase().contains("text/html") {
-                body = html_to_text(&body);
-            }
-
-            let text = bytes_to_lossy_string(&body);
+            let ct = ct.to_ascii_lowercase();
             let w = gui::shell_content_w() as u32;
             let cols = (w as usize / 8).saturating_sub(2).max(20);
-            st.lines = wrap_lines(&text, cols);
+
+            if ct.contains("text/html") {
+                let mut page = web::html::parse(&body);
+                // Parse CSS from <style> blocks
+                let mut rules = alloc::vec::Vec::new();
+                for css_text in &page.style_texts {
+                    let mut r = web::css::parse_stylesheet(css_text);
+                    rules.append(&mut r);
+                }
+                // Run tiny JS subset (document.write)
+                web::js::run_scripts(&mut page.doc, &page.script_texts);
+
+                st.lines = web::layout::render_text_lines(&page.doc, &rules, cols);
+            } else {
+                let text = bytes_to_lossy_string(&body);
+                st.lines = wrap_lines(&text, cols);
+            }
             st.scroll = 0;
         }
         Err(e) => {
@@ -516,6 +528,22 @@ pub fn handle_char(ch: u8, ctrl: bool) -> bool {
             false
         }
     }
+}
+
+
+pub fn handle_wheel(delta: i32) -> bool {
+    let st = state_mut();
+    if st.lines.is_empty() { return false; }
+
+    // Positive delta typically means scroll up.
+    if delta > 0 {
+        let step = (delta as usize).saturating_mul(3);
+        st.scroll = st.scroll.saturating_sub(step);
+    } else {
+        let step = ((-delta) as usize).saturating_mul(3);
+        st.scroll = (st.scroll + step).min(st.lines.len().saturating_sub(1));
+    }
+    true
 }
 
 pub fn handle_ext_scancode(sc: u8) -> bool {

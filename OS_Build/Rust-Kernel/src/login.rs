@@ -142,7 +142,9 @@ fn draw_str(x: i32, y: i32, s: &[u8], fg: u32, bg: u32) {
 
 fn draw_field_value(x: i32, y: i32, buf: &[u8], len: usize, masked: bool, fg: u32, bg: u32) {
     let mut cx = x;
-    for i in 0..len {
+    // Defensive clamp: prevents kernel panic if len is corrupted or exceeds buffer capacity.
+    let safe_len = core::cmp::min(len, buf.len());
+    for i in 0..safe_len {
         let b = if masked { b'*' } else { buf[i] };
         gui::draw_byte_nocursor(cx, y, b, fg, bg);
         cx += CH_W;
@@ -150,6 +152,7 @@ fn draw_field_value(x: i32, y: i32, buf: &[u8], len: usize, masked: bool, fg: u3
     // caret underscore
     gui::draw_byte_nocursor(cx, y, b'_', fg, bg);
 }
+
 
 fn active_buf_mut() -> (&'static mut [u8], &'static mut usize, bool) {
     unsafe {
@@ -271,9 +274,12 @@ pub fn handle_ascii(ch: u8) -> (bool, LoginOutcome) {
 
 fn try_submit() -> bool {
     unsafe {
-        let username = core::str::from_utf8_unchecked(&USER[..USER_LEN]);
-        let password = core::str::from_utf8_unchecked(&PASS[..PASS_LEN]);
-        let confirm  = core::str::from_utf8_unchecked(&CONF[..CONF_LEN]);
+        let ulen = core::cmp::min(USER_LEN, USER.len());
+        let username = core::str::from_utf8_unchecked(&USER[..ulen]);
+        let plen = core::cmp::min(PASS_LEN, PASS.len());
+        let password = core::str::from_utf8_unchecked(&PASS[..plen]);
+        let clen = core::cmp::min(CONF_LEN, CONF.len());
+        let confirm  = core::str::from_utf8_unchecked(&CONF[..clen]);
 
         match MODE {
             Mode::Login => {
@@ -283,8 +289,8 @@ fn try_submit() -> bool {
                 }
                 if registry::validate_login(username, password) {
                     LOGGED_IN = true;
-                    ACTIVE_USER[..USER_LEN].copy_from_slice(&USER[..USER_LEN]);
-                    ACTIVE_USER_LEN = USER_LEN;
+                    ACTIVE_USER[..ulen].copy_from_slice(&USER[..ulen]);
+                    ACTIVE_USER_LEN = ulen;
                     set_status(&MSG_OK_LOGIN[..], OK);
                     return true;
                 }
@@ -296,15 +302,15 @@ fn try_submit() -> bool {
                     set_status(&MSG_ERR_MISSING[..], ERR);
                     return false;
                 }
-                if PASS_LEN != CONF_LEN || &PASS[..PASS_LEN] != &CONF[..CONF_LEN] {
+                if plen != clen || &PASS[..plen] != &CONF[..clen] {
                     set_status(&MSG_ERR_MATCH[..], ERR);
                     return false;
                 }
                 match registry::create_user(username, password) {
                     Ok(()) => {
                         LOGGED_IN = true;
-                        ACTIVE_USER[..USER_LEN].copy_from_slice(&USER[..USER_LEN]);
-                        ACTIVE_USER_LEN = USER_LEN;
+                        ACTIVE_USER[..ulen].copy_from_slice(&USER[..ulen]);
+                        ACTIVE_USER_LEN = ulen;
                         set_status(&MSG_OK_CREATED[..], OK);
                         true
                     }

@@ -806,6 +806,17 @@ pub fn run_shell() -> ! {
         let max_h = fb::height() as i32;
         while let Some(ms) = mouse::mouse_poll(max_w, max_h) {
             let act = gui::ui_handle_mouse(ms);
+            // Mouse wheel: route to active app if cursor is inside the shell content region.
+            if ms.wheel != 0 {
+                unsafe {
+                    if APP == AppState::Browser && gui::point_in_shell_content(ms.x, ms.y) && gui::shell_is_visible() {
+                        if crate::browser::handle_wheel(ms.wheel as i32) {
+                            crate::browser::render();
+                        }
+                    }
+                }
+            }
+
             match act {
                 gui::UiAction::ShellMoved => {
                     // Window moved via blit. Only terminal needs geometry sync.
@@ -826,38 +837,63 @@ pub fn run_shell() -> ! {
                     }
                 }
                 gui::UiAction::DockLaunch(icon) => {
-                    // Ensure shell is visible and then run a quick action.
-                    if gui::shell_is_visible() {
-                        match icon {
-                            1 => {
-                                // Network: show in terminal
-                                set_app(AppState::Terminal);
-                                print_line(b"[dock] net", DIM);
-                                let _ = exec_command(b"net");
-                                if !gui::shell_is_dragging() { print_prompt_and_input(); }
-                            }
-                            2 => {
-                                // Lock/Login
-                                login::lock();
-                                set_app(AppState::Login);
-                            }
-                            3 | 6 => {
-                                // Browser (taskbar web icon)
-                                set_app(AppState::Browser);
-                            }
-                            4 => {
-                                // Text Editor: open /home/user/readme.txt
-                                let cwd = crate::fs_cmds::cwd();
-                                if let Ok(p) = fs::normalize_path(&cwd, "/home/user/readme.txt") {
-                                    editor::open_abs(&p);
-                                    set_app(AppState::Editor);
+                    match icon {
+                        0 => {
+                            // Leftmost dock icon: behave like a real Terminal launcher.
+                            // - If Terminal is already active and visible -> minimize the shell.
+                            // - Otherwise -> show shell and switch to Terminal.
+                            unsafe {
+                                let terminal_active = APP == AppState::Terminal;
+                                if gui::shell_is_visible() && terminal_active {
+                                    gui::set_shell_visible(false);
+                                    gui::redraw_all();
+                                } else {
+                                    if !gui::shell_is_visible() {
+                                        gui::set_shell_visible(true);
+                                        gui::redraw_all();
+                                    }
+                                    set_app(AppState::Terminal);
+                                    render_active_full();
                                 }
                             }
-                            5 => {
-                                // Registry
-                                set_app(AppState::Regedit);
+                        }
+                        _ => {
+                            // For all other dock icons, ensure the shell is visible.
+                            if !gui::shell_is_visible() {
+                                gui::set_shell_visible(true);
+                                gui::redraw_all();
                             }
-                            _ => {}
+                            match icon {
+                                1 => {
+                                    // Network: show in terminal
+                                    set_app(AppState::Terminal);
+                                    print_line(b"[dock] net", DIM);
+                                    let _ = exec_command(b"net");
+                                    if !gui::shell_is_dragging() { print_prompt_and_input(); }
+                                }
+                                2 => {
+                                    // Lock/Login
+                                    login::lock();
+                                    set_app(AppState::Login);
+                                }
+                                3 | 6 => {
+                                    // Browser (taskbar web icon)
+                                    set_app(AppState::Browser);
+                                }
+                                4 => {
+                                    // Text Editor: open /home/user/readme.txt
+                                    let cwd = crate::fs_cmds::cwd();
+                                    if let Ok(p) = fs::normalize_path(&cwd, "/home/user/readme.txt") {
+                                        editor::open_abs(&p);
+                                        set_app(AppState::Editor);
+                                    }
+                                }
+                                5 => {
+                                    // Registry
+                                    set_app(AppState::Regedit);
+                                }
+                                _ => {}
+                            }
                         }
                     }
                 }

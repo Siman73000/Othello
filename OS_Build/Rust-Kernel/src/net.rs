@@ -161,8 +161,9 @@ impl Rtl8139 {
                 mac[i] = inb(io + IDR0 + i as u16);
             }
 
-            // program RX buffer physical address (assumes identity map <4GB)
-            let rx_phys = (&RX_BUFFER as *const _ as u64) as u32;
+            // program RX buffer physical address (DMA needs physical addresses)
+            let rx_virt = &RX_BUFFER as *const _ as u64;
+            let rx_phys = crate::bootinfo::virt_to_phys_u32(rx_virt).unwrap_or(0);
             outl(io + RBSTART, rx_phys);
 
             // RX config:
@@ -223,7 +224,8 @@ self.tx_cur = (idx + 1) % NUM_TX;
                 for b in buf[14 + payload.len()..tx_total].iter_mut() { *b = 0; }
             }
 
-            let phys = (&TX_BUFFERS[idx] as *const _ as u64) as u32;
+            let tx_virt = &TX_BUFFERS[idx] as *const _ as u64;
+            let phys = crate::bootinfo::virt_to_phys_u32(tx_virt).unwrap_or(0);
             outl(self.io + TSAD0 + (idx as u16) * 4, phys);
             outl(self.io + TSD0 + (idx as u16) * 4, tx_total as u32);
         }

@@ -13,11 +13,13 @@ mod keyboard;
 mod mouse;
 mod idt;
 mod framebuffer_driver;
+mod bootinfo;
 mod font;
 mod gui;
 mod wallpaper;
 mod editor;
 mod browser;
+mod web;
 mod shell;
 mod net;
 mod login;
@@ -66,7 +68,7 @@ fn panic(info: &PanicInfo) -> ! {
 }
 
 #[no_mangle]
-pub extern "C" fn _start() -> ! {
+pub extern "C" fn _start(boot_info: *const framebuffer_driver::BootVideoInfoRaw) -> ! {
     // stage2 may enter long mode with IF=1. Until we install an IDT/PIC,
     // any hardware IRQ or CPU exception will triple-fault -> reboot loop
     unsafe { asm!("cli", options(nomem, nostack, preserves_flags)); }
@@ -77,8 +79,23 @@ pub extern "C" fn _start() -> ! {
     // this stops reboot-loops and gives a stable place to debug
     idt::init();
 
-    // stage2 writes boot video info at physical address 0x9000
-    gui::init_from_bootloader(0x0000_9000 as *const framebuffer_driver::BootVideoInfoRaw);
+    // stage2 writes boot video info at physical address 0x9000 (legacy BIOS path).
+    // Under UEFI we get a pointer in RDI; keep both working.
+    let bi = if boot_info.is_null() {
+        0x0000_9000 as *const framebuffer_driver::BootVideoInfoRaw
+    } else {
+        boot_info
+    };
+
+    bootinfo::init(bi);
+    gui::init_from_bootloader(bi);
+
+    // Paint the login UI immediately so you always have a visible screen even if
+    // later init work (disk/net) takes time or hits an error.
+    gui::set_ui_mode(gui::UiMode::Login);
+    gui::set_shell_visible(false);
+    login::reset();
+    login::render_fullscreen();
 
     serial_write_str("KERNEL: after GUI init.\n");
 

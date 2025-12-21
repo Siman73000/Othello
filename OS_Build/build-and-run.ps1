@@ -360,6 +360,55 @@ Write-Host ""
 # 6. Launch QEMU
 # ------------------------------------------------------------------------------
 Write-Host "All Systems Go!" -ForegroundColor Green
+
+Write-Host ""
+Write-Host "==> Preparing UEFI boot files in efi_root..."
+
+# Build UEFI loader (BOOTX64.EFI)
+$uefiLoaderRoot = Join-Path $osBuildRoot "UEFI-Loader"
+if (-not (Test-Path $uefiLoaderRoot -PathType Container)) {
+    throw "UEFI loader project not found at $uefiLoaderRoot"
+}
+
+Push-Location $uefiLoaderRoot
+if ($Debug) {
+    cargo build
+} else {
+    cargo build --release
+}
+if ($LASTEXITCODE -ne 0) {
+    Pop-Location
+    throw "UEFI loader build failed."
+}
+Pop-Location
+
+$efiBootDir = Join-Path $osBuildRoot "efi_root\EFI\BOOT"
+New-Item -ItemType Directory -Force -Path $efiBootDir | Out-Null
+
+$loaderCandidates = @(
+    (Join-Path $uefiLoaderRoot "target\x86_64-unknown-uefi\release\othello-uefi-loader.efi"),
+    (Join-Path $uefiLoaderRoot "target\x86_64-unknown-uefi\release\othello-uefi-loader.exe"),
+    (Join-Path $uefiLoaderRoot "target\x86_64-unknown-uefi\release\othello-uefi-loader"),
+    (Join-Path $uefiLoaderRoot "target\x86_64-unknown-uefi\debug\othello-uefi-loader.efi"),
+    (Join-Path $uefiLoaderRoot "target\x86_64-unknown-uefi\debug\othello-uefi-loader.exe"),
+    (Join-Path $uefiLoaderRoot "target\x86_64-unknown-uefi\debug\othello-uefi-loader")
+)
+$loaderOut = $loaderCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $loaderOut) {
+    throw "UEFI loader output not found under $uefiLoaderRoot\target\x86_64-unknown-uefi\..."
+}
+
+Copy-Item $loaderOut (Join-Path $efiBootDir "BOOTX64.EFI") -Force
+
+# Copy kernel ELF to boot volume so the loader can read it
+if (-not (Test-Path $kernelElf)) {
+    throw "Kernel ELF not found at $kernelElf"
+}
+Copy-Item $kernelElf (Join-Path $osBuildRoot "efi_root\kernel.elf") -Force
+
+Write-Host "    BOOTX64.EFI => $efiBootDir\BOOTX64.EFI"
+Write-Host "    kernel.elf  => $osBuildRoot\efi_root\kernel.elf"
+
 Write-Host ""
 Write-Host "==> Launching QEMU with network device (RTL8139) and windowed display..."
 
@@ -369,17 +418,15 @@ if (-not $script:QemuExePath) {
 
 # Tip: for debugging reboot loops, add "-no-reboot" (and optionally -d int,cpu_reset)
 $qemuArgs = @(
-    "-m", "512M",
-    "-machine", "pc,accel=tcg",
-    "-drive", "format=raw,file=$diskImg,if=ide",
-    "-boot", "c",
+    "-machine", "q35",
+    "-m", "1024",
+    "-drive", "if=pflash,format=raw,readonly=on,file=OVMF_CODE.fd",
+    "-drive", "if=pflash,format=raw,file=OVMF_VARS.fd",
+    "-drive", "file=fat:rw:efi_root,format=raw",
+    "-netdev", "user,id=net1",
+    "-device", "rtl8139,netdev=net1",
     "-serial", "stdio",
-    "-device", "rtl8139,netdev=n1",
-    "-netdev", "user,id=n1",
-    "-vga", "std",
-    # SDL display with GL; you can add '-full-screen' as another arg if desired
-    "-display", "sdl",
-    "-rtc", "base=localtime"
+    "-no-reboot"
 )
 
 & $script:QemuExePath @qemuArgs

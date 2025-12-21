@@ -124,7 +124,11 @@ pub fn mouse_poll(max_w: i32, max_h: i32) -> Option<MouseState> {
         CUR_X = (CUR_X + dx).clamp(0, max_w.saturating_sub(1));
         CUR_Y = (CUR_Y + dy).clamp(0, max_h.saturating_sub(1));
 
-        let wheel = if PACKET_LEN == 4 { PACKET[3] as i8 } else { 0 };
+        let wheel = if PACKET_LEN == 4 {
+            // IntelliMouse: wheel is signed 4-bit in low nibble (-8..+7)
+            let z = PACKET[3] as i8;
+            (z << 4) >> 4
+        } else { 0 };
 
         Some(MouseState { x: CUR_X, y: CUR_Y, left, right, middle, wheel })
     }

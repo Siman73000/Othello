@@ -1,0 +1,10 @@
+C:\Users\simon.hamilton\Othello\OS_Build\Rust-Kernel\target\x86_64-unknown-none\release\deps\lock_api-3355f0f5fb62526b.d: C:\Users\simon.hamilton\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\lock_api-0.4.14\src\lib.rs C:\Users\simon.hamilton\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\lock_api-0.4.14\src\mutex.rs C:\Users\simon.hamilton\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\lock_api-0.4.14\src\remutex.rs C:\Users\simon.hamilton\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\lock_api-0.4.14\src\rwlock.rs
+
+C:\Users\simon.hamilton\Othello\OS_Build\Rust-Kernel\target\x86_64-unknown-none\release\deps\liblock_api-3355f0f5fb62526b.rlib: C:\Users\simon.hamilton\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\lock_api-0.4.14\src\lib.rs C:\Users\simon.hamilton\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\lock_api-0.4.14\src\mutex.rs C:\Users\simon.hamilton\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\lock_api-0.4.14\src\remutex.rs C:\Users\simon.hamilton\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\lock_api-0.4.14\src\rwlock.rs
+
+C:\Users\simon.hamilton\Othello\OS_Build\Rust-Kernel\target\x86_64-unknown-none\release\deps\liblock_api-3355f0f5fb62526b.rmeta: C:\Users\simon.hamilton\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\lock_api-0.4.14\src\lib.rs C:\Users\simon.hamilton\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\lock_api-0.4.14\src\mutex.rs C:\Users\simon.hamilton\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\lock_api-0.4.14\src\remutex.rs C:\Users\simon.hamilton\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\lock_api-0.4.14\src\rwlock.rs
+
+C:\Users\simon.hamilton\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\lock_api-0.4.14\src\lib.rs:
+C:\Users\simon.hamilton\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\lock_api-0.4.14\src\mutex.rs:
+C:\Users\simon.hamilton\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\lock_api-0.4.14\src\remutex.rs:
+C:\Users\simon.hamilton\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\lock_api-0.4.14\src\rwlock.rs:

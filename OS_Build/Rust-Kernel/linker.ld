@@ -5,7 +5,7 @@ ENTRY(_start)
 SECTIONS
 {
     /* Physical / virtual address where the kernel is loaded. */
-    . = 0x0000000000020000;
+    . = 0x00200000;
 
     .text : ALIGN(4K)
     {

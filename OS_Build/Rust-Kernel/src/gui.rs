@@ -306,6 +306,13 @@ pub fn shell_content_left() -> i32 { unsafe { SHELL_CONTENT.x } }
 pub fn shell_content_top() -> i32 { unsafe { SHELL_CONTENT.y } }
 pub fn shell_content_w() -> i32 { unsafe { SHELL_CONTENT.w } }
 pub fn shell_content_h() -> i32 { unsafe { SHELL_CONTENT.h } }
+pub fn point_in_shell_content(x: i32, y: i32) -> bool {
+    let l = shell_content_left();
+    let t = shell_content_top();
+    let w = shell_content_w();
+    let h = shell_content_h();
+    x >= l && y >= t && x < l + w && y < t + h
+}
 pub fn shell_footer_x() -> i32 { unsafe { SHELL_FOOT.x } }
 pub fn shell_footer_y() -> i32 { unsafe { SHELL_FOOT.y } }
 pub fn shell_footer_w() -> i32 { unsafe { SHELL_FOOT.w } }
@@ -1276,20 +1283,23 @@ pub fn ui_handle_mouse(ms: MouseState) -> UiAction {
                 for i in 0..DOCK_ICON_COUNT {
                     if DOCK_ICONS[i].contains(ms.x, ms.y) {
                 if i == 0 {
-                            // Toggle shell visibility
-                            SHELL_VISIBLE = !SHELL_VISIBLE;
-                            if !SHELL_VISIBLE { DRAG_ACTIVE = false; }
+                            // Terminal / Shell icon:
+                            // If the shell is hidden, show it and draw the frame.
+                            // Always emit DockLaunch(0) so shell.rs can decide:
+                            //   - switch to Terminal, or
+                            //   - minimize if Terminal is already active.
+                            if !SHELL_VISIBLE {
+                                SHELL_VISIBLE = true;
+                                DRAG_ACTIVE = false;
 
-                            // repaint desktop (and window frame if visible)
-                            cursor_restore();
-                            draw_desktop();
-                            if SHELL_VISIBLE {
+                                cursor_restore();
+                                draw_desktop();
                                 recalc_layout();
                                 draw_shell_window_frame();
                                 clear_shell_content_nocursor();
                             }
 
-                            break 'act UiAction::ShellVisibilityChanged;
+                            break 'act UiAction::DockLaunch(0);
                         } else {
                             // Launch/switch app via dock: ensure shell is visible
                             if !SHELL_VISIBLE {

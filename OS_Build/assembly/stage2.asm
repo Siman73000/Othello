@@ -20,10 +20,13 @@
 %ifndef KERNEL_SECTORS
 %define KERNEL_SECTORS    1500000
 %endif
-%define KERNEL_LOAD_SEG   0x2000
-%define KERNEL_LOAD_OFF   0x0000
-%define KERNEL_LOAD_PHYS  0x0000000000020000
+%define KERNEL_BOUNCE_SEG  0x7000
+%define KERNEL_BOUNCE_OFF  0x0000
+%define KERNEL_BOUNCE_PHYS 0x0000000000070000
 
+; Destination physical address where the kernel will live at runtime.
+; NOTE: You MUST link your kernel for this address as well.
+%define KERNEL_DEST_PHYS   0x0000000000200000
 %define KERNEL_READ_CHUNK  16    ; sectors per INT13h AH=42h call (keeps buffers <64KiB)
 
 %define CODE_SEG      0x08
@@ -55,6 +58,8 @@ stage2_entry:
     mov es, ax
     mov ss, ax
     mov sp, 0x7C00              ; simple temporary 16-bit stack below us
+
+    call enable_a20_fast
 
     mov [boot_drive], dl        ; preserve BIOS boot drive for INT 13h
 
@@ -94,43 +99,49 @@ stage2_entry:
 ; Out: returns on success, prints error and halts on failure
 
 load_kernel_lba:
-    pusha
-    push ds
-    push es
+    ; Loads the kernel using BIOS INT 13h extensions (AH=42h) into a low-memory
+    ; bounce buffer, then copies each chunk to high memory at KERNEL_DEST_PHYS.
+    ;
+    ; This avoids the conventional-memory "VGA hole" at 0xA0000 and allows large kernels,
+    ; but requires that your kernel is LINKED to run at KERNEL_DEST_PHYS.
 
+    ; DS must be 0 for our data references (DAP and variables)
     xor ax, ax
     mov ds, ax
+
+    ; Initialize state
+    mov word  [rem_sectors], KERNEL_SECTORS
+    mov dword [cur_lba_low], KERNEL_LBA_START
+    mov dword [kernel_dst],  (KERNEL_DEST_PHYS & 0xFFFFFFFF)
 
     ; Fill in the Disk Address Packet (DAP)
     mov byte [dap.size], 16
     mov byte [dap.reserved], 0
-    mov word [dap.buf_off],      KERNEL_LOAD_OFF
-
-    ; Destination starts at KERNEL_LOAD_SEG:0000
-    mov ax, KERNEL_LOAD_SEG
-    mov es, ax
-
-    mov dword [dap.lba_low],  KERNEL_LBA_START
+    mov word [dap.buf_off], KERNEL_BOUNCE_OFF
+    mov word [dap.buf_seg], KERNEL_BOUNCE_SEG
     mov dword [dap.lba_high], 0
 
     ; Progress message (may not show in VBE graphics, but harmless)
     mov si, msg_load_kernel
     call bios_print_string
 
-    mov cx, KERNEL_SECTORS          ; remaining sectors
-
 .load_loop:
+    mov cx, [rem_sectors]
     cmp cx, 0
     je  .success
 
-    ; ax = min(cx, KERNEL_READ_CHUNK)
+    ; ax = min(remaining, KERNEL_READ_CHUNK)
     mov ax, cx
     cmp ax, KERNEL_READ_CHUNK
     jbe .count_ok
     mov ax, KERNEL_READ_CHUNK
 .count_ok:
+    mov [tmp_sectors], ax
     mov word [dap.sector_count], ax
-    mov word [dap.buf_seg],      es
+
+    ; Set current LBA into DAP
+    mov eax, [cur_lba_low]
+    mov dword [dap.lba_low], eax
 
     ; DS:SI must point to DAP
     mov si, dap
@@ -142,28 +153,20 @@ load_kernel_lba:
     int 0x13
     jc  .error                      ; CF set on error
 
-    ; Advance LBA by ax sectors (32-bit low)
-    add word [dap.lba_low], ax
-    adc word [dap.lba_low+2], 0
+    ; Copy bounce buffer -> high memory
+    call copy_bounce_to_high
 
-    ; Advance destination segment by ax*512 bytes = ax*32 paragraphs
-    mov bx, ax
-    shl bx, 5
-    mov dx, es
-    add dx, bx
-    mov es, dx
+    ; Advance LBA and remaining by tmp_sectors (reload from memory; copy routine clobbers regs)
+    mov ax, [tmp_sectors]
+    movzx eax, ax
+    add dword [cur_lba_low], eax
+    sub word [rem_sectors], ax
 
-    ; remaining -= ax
-    sub cx, ax
     jmp .load_loop
 
 .success:
     mov si, msg_kernel_ok
     call bios_print_string
-
-    pop es
-    pop ds
-    popa
     ret
 
 .error:
@@ -191,8 +194,39 @@ load_kernel_lba:
     jmp .hang_loop
 
 ; ------------------------------------------------
+; Copy one chunk from the low-memory bounce buffer to high memory
+; ------------------------------------------------
+; Uses tmp_sectors (word) for the sector count of the last read.
+; Updates kernel_dst (dword) by tmp_sectors*512.
+;
+; NOTE: This routine temporarily switches into 32-bit protected mode for the copy,
+; then returns to real mode so BIOS calls continue to work.
+copy_bounce_to_high:
+    ; Preserve the real-mode stack pointer so our RET works after mode switching.
+    mov [saved_sp], sp
+
+    cli
+    lgdt [gdt_descriptor]
+
+    mov eax, cr0
+    or  eax, 0x00000001         ; set PE
+    mov cr0, eax
+
+    ; Far jump to 32-bit copy code
+    jmp CODE_SEG:copy_pm_entry
+
+; ------------------------------------------------
 ; Small 16-bit helpers
 ; ------------------------------------------------
+
+; Enable A20 (fast A20 gate via port 0x92). QEMU/SeaBIOS usually has A20 enabled,
+; but we enable it explicitly because we copy/load the kernel above 1MiB.
+enable_a20_fast:
+    in   al, 0x92
+    or   al, 0x02          ; set A20 enable
+    and  al, 0xFE          ; clear reset bit
+    out  0x92, al
+    ret
 
 ; Print zero-terminated string at DS:SI using INT 10h / teletype
 bios_print_string:
@@ -422,6 +456,55 @@ set_video_mode_and_bootinfo:
 ; ------------------------------------------------
 
 [BITS 32]
+copy_pm_entry:
+    ; Set up flat data segments
+    mov ax, DATA_SEG
+    mov ds, ax
+    mov es, ax
+    mov ss, ax
+
+    ; Keep the *same* stack pointer value so our real-mode return address remains valid.
+    ; (We do not push/pop/call in this 32-bit copy path.)
+    movzx esp, word [saved_sp]
+
+    ; Copy tmp_sectors*512 bytes from bounce -> kernel_dst
+    mov esi, KERNEL_BOUNCE_PHYS
+    mov edi, [kernel_dst]
+
+    movzx ecx, word [tmp_sectors]
+    mov ebx, ecx
+    shl ebx, 9                 ; bytes = sectors*512
+
+    mov edx, ebx               ; total bytes
+    shr ecx, 2                 ; dword count
+    rep movsd
+
+    mov ecx, edx
+    and ecx, 3                 ; remaining bytes
+    rep movsb
+
+    ; kernel_dst += bytes
+    mov eax, [kernel_dst]
+    add eax, ebx
+    mov [kernel_dst], eax
+
+    ; Return to real mode
+    mov eax, cr0
+    and eax, 0xFFFFFFFE
+    mov cr0, eax
+    jmp 0x0000:copy_rm_entry
+
+[BITS 16]
+copy_rm_entry:
+    xor ax, ax
+    mov ds, ax
+    mov es, ax
+    mov ss, ax
+    mov sp, [saved_sp]
+    sti
+    ret
+
+[BITS 32]
 pm_entry:
     ; Set up data segments
     mov ax, DATA_SEG
@@ -432,7 +515,7 @@ pm_entry:
     mov gs, ax
 
     ; 32-bit temporary stack near top of first MiB
-    mov esp, 0x0009FC00
+    mov esp, 0x00098000
 
     call switchto64bit_stage2
 
@@ -544,7 +627,7 @@ long_mode_entry:
     mov gs, ax
 
     ; 64-bit stack
-    mov rsp, 0x0009FF00
+    mov rsp, 0x00098F00
 
     ; Debug: write "LM64" to text memory (won't be visible in VBE, but harmless)
     mov rdi, 0x00000000000B8000
@@ -557,8 +640,8 @@ long_mode_entry:
     mov ax, 0x0F34         ; '4'
     mov [rdi+6], ax
 
-    ; Jump to kernel entry at 0x0002_0000
-    mov rax, 0x0000000000020000
+    ; Jump to kernel entry at KERNEL_DEST_PHYS
+    mov rax, KERNEL_DEST_PHYS
     jmp rax
 
 .hang:
@@ -582,6 +665,13 @@ dap:
 
 disk_status db 0
 boot_drive  db 0
+
+; Kernel loader state (used by load_kernel_lba / copy_bounce_to_high)
+rem_sectors dw 0
+cur_lba_low dd 0
+kernel_dst  dd 0
+tmp_sectors dw 0
+saved_sp    dw 0
 
 msg_stage2      db "Stage 2 loaded at 0x8000", 13,10,0
 msg_load_kernel db "Loading kernel...", 13,10,0

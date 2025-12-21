@@ -1,0 +1,6 @@
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+   0.215175300s  INFO prepare_target{force=false package_id=Rust-Kernel v0.1.0 (C:\Users\simon.hamilton\Downloads\Othello_UEFI_loader_updated\Othello\OS_Build\Rust-Kernel) target="rust-kernel"}: cargo::core::compiler::fingerprint: fingerprint dirty for Rust-Kernel v0.1.0 (C:\Users\simon.hamilton\Downloads\Othello_UEFI_loader_updated\Othello\OS_Build\Rust-Kernel)/Check { test: true }/TargetInner { name: "rust-kernel", doc: true, ..: with_path("C:\\Users\\simon.hamilton\\Downloads\\Othello_UEFI_loader_updated\\Othello\\OS_Build\\Rust-Kernel\\src/rust-kernel.rs", Edition2021) }
+   0.215275100s  INFO prepare_target{force=false package_id=Rust-Kernel v0.1.0 (C:\Users\simon.hamilton\Downloads\Othello_UEFI_loader_updated\Othello\OS_Build\Rust-Kernel) target="rust-kernel"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(Stale)
+    Checking Rust-Kernel v0.1.0 (C:\Users\simon.hamilton\Downloads\Othello_UEFI_loader_updated\Othello\OS_Build\Rust-Kernel)
+error: could not compile `Rust-Kernel` (bin "rust-kernel" test) due to 1 previous error; 25 warnings emitted
