@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use core::arch::asm;
+use alloc::vec::Vec;
 
 use crate::{framebuffer_driver as fb, gui, keyboard, login, mouse, net, regedit, editor, browser, fs, time};
 use crate::serial_write_str;
@@ -125,6 +126,16 @@ static mut INLEN: usize = 0;
 static mut CARET: usize = 0;
 static mut CARET_ON: bool = true;
 
+// Scrollback buffer: store printed lines so we can redraw the terminal viewport
+// without using blit operations (avoids cursor/restore artifacts).
+const SCROLLBACK_MAX_LINES: usize = 10000;
+static mut SCROLLBACK: Option<Vec<Vec<u8>>> = None;
+// Index of the first scrollback line currently shown in the viewport
+static mut SCROLLBACK_POS: usize = 0;
+// If true the user has interacted with scrollback (wheel) and we should not
+// auto-pin to bottom until the user types or a command is executed.
+static mut SCROLLBACK_USER_SCROLLED: bool = false;
+
 fn layout() {
     unsafe {
         let x = gui::shell_content_left();
@@ -221,28 +232,66 @@ fn term_clear() {
     }
 }
 
-fn draw_bytes_line_clip_nocursor(x: i32, y: i32, bytes: &[u8], fg: u32, bg: u32, clip_r: i32) {
-    if bytes.is_empty() { return; }
+fn draw_bytes_line_clip_nocursor(x: i32, y: i32, bytes: &[u8], fg: u32, bg: u32, clip_r: i32) -> usize {
+    // Draws bytes starting at (x,y) with clipping to clip_r, wrapping to next
+    // line when the current line width is exceeded. Returns the number of
+    // text lines actually drawn (>=1 if bytes non-empty and some glyphs drawn).
+    if bytes.is_empty() { return 0; }
     let mut cx = x;
+    let mut cy = y;
+    let mut lines_drawn: usize = 1;
+
     for &b in bytes {
         if b == b'\n' { break; }
-        if cx + CH_W > clip_r { break; }
+
+        // Printable ascii only
         if b >= 0x20 && b <= 0x7E {
-            gui::draw_byte_nocursor(cx, y, b, fg, bg);
+            // If the next glyph would overflow the clip, wrap to next line
+            if cx + CH_W > clip_r {
+                cx = x;
+                cy += CH_H;
+                lines_drawn += 1;
+
+                // If we would draw past the terminal visible region, stop.
+                unsafe {
+                    // If TERM_H is 0 we can't determine bounds; stop defensively.
+                    if TERM_H <= 0 { break; }
+                    let max_y = TERM_Y0 + TERM_H - CH_H;
+                    if cy > max_y { break; }
+                }
+            }
+
+            gui::draw_byte_nocursor(cx, cy, b, fg, bg);
+            cx += CH_W;
+        } else {
+            // Non-printable: treat as space (skip) unless newline handled above
+            if cx + CH_W > clip_r {
+                cx = x;
+                cy += CH_H;
+                lines_drawn += 1;
+                unsafe {
+                    if TERM_H <= 0 { break; }
+                    let max_y = TERM_Y0 + TERM_H - CH_H;
+                    if cy > max_y { break; }
+                }
+            }
+            cx += CH_W;
         }
-        cx += CH_W;
     }
+
+    lines_drawn
 }
 
-fn draw_bytes_line_nocursor(x: i32, y: i32, bytes: &[u8], fg: u32, bg: u32) {
+fn draw_bytes_line_nocursor(x: i32, y: i32, bytes: &[u8], fg: u32, bg: u32) -> usize {
     let clip_r = x + unsafe { TERM_W };
-    draw_bytes_line_clip_nocursor(x, y, bytes, fg, bg, clip_r);
+    draw_bytes_line_clip_nocursor(x, y, bytes, fg, bg, clip_r)
 }
 
-fn draw_bytes_line(x: i32, y: i32, bytes: &[u8], fg: u32, bg: u32) {
+fn draw_bytes_line(x: i32, y: i32, bytes: &[u8], fg: u32, bg: u32) -> usize {
     gui::begin_paint();
-    draw_bytes_line_nocursor(x, y, bytes, fg, bg);
+    let n = draw_bytes_line_nocursor(x, y, bytes, fg, bg);
     gui::end_paint();
+    n
 }
 
 fn scroll_if_needed() {
@@ -270,9 +319,264 @@ fn scroll_if_needed() {
 fn print_line(bytes: &[u8], fg: u32) {
     if !gui::shell_is_visible() { return; }
     unsafe {
-        scroll_if_needed();
-        draw_bytes_line(TERM_X, TERM_Y, bytes, fg, BG);
-        TERM_Y += CH_H;
+        // Ensure scrollback exists
+        if SCROLLBACK.is_none() {
+            SCROLLBACK = Some(Vec::new());
+            SCROLLBACK_POS = 0;
+        }
+
+        let sb = SCROLLBACK.as_mut().unwrap();
+
+        // Append the raw byte line to scrollback. We'll perform wrapping when
+        // redrawing the viewport.
+        sb.push(bytes.to_vec());
+        if sb.len() > SCROLLBACK_MAX_LINES {
+            // drop oldest
+            sb.remove(0);
+            if SCROLLBACK_POS > 0 { SCROLLBACK_POS = SCROLLBACK_POS.saturating_sub(1); }
+        }
+
+        // If the user is at the bottom (showing latest), keep viewport pinned to bottom
+        let visible_lines_est = (TERM_H / CH_H).max(1) as usize;
+        if sb.len() <= visible_lines_est || SCROLLBACK_POS + visible_lines_est >= sb.len() {
+            // show last page
+            SCROLLBACK_POS = sb.len().saturating_sub(visible_lines_est);
+        }
+
+        // Redraw the terminal viewport from scrollback
+        redraw_terminal_viewport();
+    }
+}
+
+// Force append and scroll viewport to bottom (used when a command is entered)
+fn print_line_force(bytes: &[u8], fg: u32) {
+    if !gui::shell_is_visible() { return; }
+    unsafe {
+        if SCROLLBACK.is_none() {
+            SCROLLBACK = Some(Vec::new());
+            SCROLLBACK_POS = 0;
+        }
+        let sb = SCROLLBACK.as_mut().unwrap();
+        sb.push(bytes.to_vec());
+        if sb.len() > SCROLLBACK_MAX_LINES {
+            sb.remove(0);
+        }
+        let visible_lines_est = (TERM_H / CH_H).max(1) as usize;
+        SCROLLBACK_POS = sb.len().saturating_sub(visible_lines_est);
+        // Reset user-scrolled flag since we pinned to bottom programmatically.
+        SCROLLBACK_USER_SCROLLED = false;
+        redraw_terminal_viewport();
+    }
+}
+
+// Ensure the scrollback viewport is pinned to the bottom. Return true if we
+// moved the viewport (caller may want to avoid redundant draws).
+fn ensure_scrollback_at_bottom(force: bool) -> bool {
+    unsafe {
+        if SCROLLBACK.is_none() { return false; }
+        // If user has scrolled and we are not forcing, do nothing.
+        if SCROLLBACK_USER_SCROLLED && !force { return false; }
+        let sb = SCROLLBACK.as_ref().unwrap();
+        let visible_lines_est = (TERM_H / CH_H).max(1) as usize;
+        let new_pos = sb.len().saturating_sub(visible_lines_est);
+        if SCROLLBACK_POS != new_pos {
+            SCROLLBACK_POS = new_pos;
+            // If we are forcing, clear the user-scrolled flag.
+            if force { SCROLLBACK_USER_SCROLLED = false; }
+            return true;
+        }
+        return false;
+    }
+}
+
+// Redraw terminal viewport from scrollback starting at SCROLLBACK_POS.
+fn redraw_terminal_viewport_nocursor() {
+    if !gui::shell_is_visible() { return; }
+    unsafe {
+        // Clear terminal area
+        clear_rect(TERM_X, TERM_Y0, TERM_W, TERM_H, BG);
+
+        // Draw lines from scrollback starting at SCROLLBACK_POS (nocursor drawing)
+        if let Some(sb) = &SCROLLBACK {
+            let mut y = TERM_Y0;
+            for i in SCROLLBACK_POS..sb.len() {
+                if y > TERM_Y0 + TERM_H - CH_H { break; }
+                // draw_bytes_line_nocursor returns number of wrapped lines written
+                let lines = draw_bytes_line_nocursor(TERM_X, y, &sb[i], FG, BG);
+                y += (lines as i32) * CH_H;
+            }
+            TERM_Y = y;
+        } else {
+            TERM_Y = TERM_Y0;
+        }
+
+        // Draw status/footer without touching cursor state
+        draw_status_bar_nocursor();
+        print_prompt_and_input_nocursor();
+    }
+}
+
+fn redraw_terminal_viewport() {
+    gui::begin_paint();
+    redraw_terminal_viewport_nocursor();
+    gui::end_paint();
+}
+
+fn draw_status_bar_nocursor() {
+    if !gui::shell_is_visible() { return; }
+    let x = gui::shell_content_left();
+    let y = gui::shell_content_top();
+    let w = gui::shell_content_w();
+    if w <= 0 { return; }
+    // Clear status background
+    clear_rect(x, y, w, STATUS_H, 0x0B1220);
+
+    // Build status line similar to draw_status_bar()
+    let mut line = [0u8; 64];
+    let mut n = 0usize;
+    let base = b"Terminal";
+    line[..base.len()].copy_from_slice(base);
+    n += base.len();
+    if login::is_logged_in() {
+        let sep = b" - ";
+        if n + sep.len() < line.len() {
+            line[n..n + sep.len()].copy_from_slice(sep);
+            n += sep.len();
+        }
+        let u = login::current_user_bytes();
+        let take = u.len().min(line.len().saturating_sub(n));
+        line[n..n + take].copy_from_slice(&u[..take]);
+        n += take;
+    } else {
+        let s = b" (locked)";
+        let take = s.len().min(line.len().saturating_sub(n));
+        line[n..n + take].copy_from_slice(&s[..take]);
+        n += take;
+    }
+
+    draw_bytes_line_clip_nocursor(x + PAD, y + 2, &line[..n], 0xE5E7EB, 0x0B1220, x + w - PAD);
+}
+
+fn print_prompt_and_input_nocursor() {
+    if !gui::shell_is_visible() { return; }
+    // NOTE: Do NOT auto-pin scrollback here. This nocursor variant is used
+    // during full-viewport redraws (for example from mouse wheel). If we
+    // auto-pinned here we'd immediately undo any scroll adjustments made by
+    // the wheel. The paint-wrapped `print_prompt_and_input()` handles
+    // pinning when appropriate (typing/enter).
+
+    let fx = gui::shell_footer_x();
+    let fy = gui::shell_footer_y();
+    let fw = gui::shell_footer_w();
+    let fh = gui::shell_footer_h();
+    if fw <= 0 || fh <= 0 { return; }
+
+    // Clear footer
+    clear_rect(fx, fy, fw, fh, BG);
+
+    // prompt: "<dir> $ "
+    let cwd = crate::fs_cmds::cwd();
+    let name: &str = if cwd.is_empty() { "/" } else { cwd.as_str() };
+
+    // Draw prompt at (fx+6, fy+1)
+    let mut px = fx + 6;
+    let max_name_chars: usize = 20;
+    let name_bytes = name.as_bytes();
+    let start = if name_bytes.len() > max_name_chars { name_bytes.len() - max_name_chars } else { 0 };
+    for &b in &name_bytes[start..] {
+        gui::draw_byte_nocursor(px, fy + 1, b, DIM, BG);
+        px += CH_W;
+    }
+    gui::draw_byte_nocursor(px, fy + 1, b' ', DIM, BG); px += CH_W;
+    gui::draw_byte_nocursor(px, fy + 1, b'$', DIM, BG); px += CH_W;
+    gui::draw_byte_nocursor(px, fy + 1, b' ', DIM, BG); px += CH_W;
+
+    // input
+    let start_x = px;
+    unsafe {
+        let bytes = &INBUF[..INLEN];
+        let clip_r = fx + fw - 4;
+        draw_bytes_line_clip_nocursor(start_x, fy + 1, bytes, FG, BG, clip_r);
+
+        // caret
+        if CARET_ON {
+            let cx = start_x + (CARET as i32) * CH_W;
+            if cx < fx + fw - 2 {
+                clear_rect(cx, fy + 2, 2, CH_H - 3, FG);
+            }
+        }
+    }
+}
+
+/// Scroll the terminal view by `delta` wheel-notches. Positive delta scrolls
+/// up (move content down), negative scrolls down (move content up).
+pub fn shell_mouse_wheel(delta: i8) {
+    if delta == 0 { return; }
+    if !crate::gui::shell_is_visible() { return; }
+    unsafe {
+        // Use GUI paint wrappers to avoid cursor artifacts (they call cursor_restore()/cursor_redraw()).
+        gui::begin_paint();
+
+        // delta units -> pixel delta (1 notch == one text line height)
+        let mut dp = (delta as i32) * CH_H;
+
+        // Clamp dp to reasonable bounds (so we don't clear whole region)
+        let max_scroll = TERM_H - CH_H;
+        if max_scroll <= 0 {
+            gui::end_paint();
+            return;
+        }
+        dp = dp.clamp(-max_scroll, max_scroll);
+
+        if dp > 0 {
+            // Scroll up: move visible block down by dp to reveal top area
+            let move_h = (TERM_H - dp).max(0);
+            if move_h > 0 {
+                fb::blit_move_rect(TERM_X, TERM_Y0, TERM_W, move_h, TERM_X, TERM_Y0 + dp);
+            }
+            // Clear newly revealed top area
+            clear_rect(TERM_X, TERM_Y0, TERM_W, dp, BG);
+            TERM_Y += dp;
+        } else {
+            let ad = (-dp) as i32;
+            let move_h = (TERM_H - ad).max(0);
+            if move_h > 0 {
+                fb::blit_move_rect(TERM_X, TERM_Y0 + ad, TERM_W, move_h, TERM_X, TERM_Y0);
+            }
+            // Clear newly revealed bottom area
+            clear_rect(TERM_X, TERM_Y0 + TERM_H - ad, TERM_W, ad, BG);
+            TERM_Y -= ad;
+        }
+
+        // Clamp TERM_Y so the next printed line remains in visible region
+        let miny = TERM_Y0;
+        let maxy = TERM_Y0 + TERM_H - CH_H;
+        if TERM_Y < miny { TERM_Y = miny; }
+        if TERM_Y > maxy { TERM_Y = maxy; }
+
+        // If we are using scrollback, adjust scroll position and redraw.
+        if SCROLLBACK.is_some() {
+            let sb = SCROLLBACK.as_ref().unwrap();
+            let visible_lines = (TERM_H / CH_H).max(1) as usize;
+            let max_start = if sb.len() > visible_lines { sb.len() - visible_lines } else { 0 };
+            if delta > 0 {
+                // scroll up -> decrease start index
+                let dec = delta as usize;
+                SCROLLBACK_POS = SCROLLBACK_POS.saturating_sub(dec);
+                SCROLLBACK_USER_SCROLLED = true;
+            } else if delta < 0 {
+                let inc = (-delta) as usize;
+                SCROLLBACK_POS = (SCROLLBACK_POS + inc).min(max_start);
+                SCROLLBACK_USER_SCROLLED = true;
+            }
+            redraw_terminal_viewport_nocursor();
+        } else {
+            // Redraw status/footer since scrolling can change caret/visible lines
+            draw_status_bar_nocursor();
+            print_prompt_and_input_nocursor();
+        }
+
+        gui::end_paint();
     }
 }
 
@@ -293,6 +597,10 @@ fn print_prompt_and_input() {
     let fw = gui::shell_footer_w();
     let fh = gui::shell_footer_h();
     if fw <= 0 || fh <= 0 { return; }
+
+    // For normal redraws do not force pin to bottom; callers that want to
+    // ensure the viewport is at the live bottom should call the
+    // `print_prompt_and_input_force()` helper.
 
     // Clear footer
     gui::begin_paint();
@@ -368,6 +676,20 @@ fn buf_delete() {
         }
         INLEN -= 1;
     }
+}
+
+/// Forceful prompt draw: ensure scrollback is pinned to bottom, redraw
+/// viewport if necessary, else draw footer/prompt. Use this when the user
+/// types or after a command has executed.
+fn print_prompt_and_input_force() {
+    if !gui::shell_is_visible() { return; }
+    // If we moved the viewport to bottom, redraw whole viewport under paint.
+    if ensure_scrollback_at_bottom(true) {
+        redraw_terminal_viewport();
+        return;
+    }
+    // Otherwise draw footer normally.
+    print_prompt_and_input();
 }
 
 fn exec_command(line: &[u8]) -> Option<AppState> {
@@ -466,8 +788,13 @@ fn exec_command(line: &[u8]) -> Option<AppState> {
             None
         }
         b"about" => {
-            print_line(b"Othello OS - bare-metal Rust (WIP)", OK);
-            print_line(b"GUI: framebuffer + PS/2 mouse/keyboard (polled)", DIM);
+            print_line(b"", FG);
+            print_line(b"Othello OS", OK);
+            print_line(b"", FG);
+            print_line(b"UEFI Version 1.0.1", FG);
+            print_line(b"Rust Kernel Version 1.2.1", FG);
+            print_line(b"", FG);
+            print_line(b"Developed by Simon Hamilton.", OK);
             None
         }
         b"login" => {
@@ -620,7 +947,7 @@ fn print_kv_ipv4(prefix: &[u8], ip: [u8; 4], fg: u32) {
 }
 
 fn cmd_ipconfig() {
-    print_line(b"Windows IP Configuration", OK);
+    print_line(b"", FG);
 
     let r = net::net_scan();
     if !r.devices.is_empty() {
@@ -1045,7 +1372,10 @@ AppState::Terminal => match ch {
                             let take = INLEN.min(line.len().saturating_sub(n));
                             line[n..n + take].copy_from_slice(&INBUF[..take]);
                             n += take;
-                            print_line(&line[..n], FG);
+                            // When a command is entered, force the terminal to
+                            // scroll to the bottom so the echoed command and
+                            // subsequent output are visible.
+                            print_line_force(&line[..n], FG);
 
                             let req = exec_command(&INBUF[..INLEN]);
                             INLEN = 0;
@@ -1056,23 +1386,23 @@ AppState::Terminal => match ch {
                         if let Some(next) = req {
                             set_app(next);
                         } else if !gui::shell_is_dragging() {
-                            print_prompt_and_input();
+                            print_prompt_and_input_force();
                         }
                     }
                     0x08 => { // backspace
                         buf_backspace();
-                        if !gui::shell_is_dragging() { print_prompt_and_input(); }
+                        if !gui::shell_is_dragging() { print_prompt_and_input_force(); }
                     }
                     b'\t' => {
                         // For now: tab inserts spaces (simple)
                         buf_insert(b' ');
                         buf_insert(b' ');
-                        if !gui::shell_is_dragging() { print_prompt_and_input(); }
+                        if !gui::shell_is_dragging() { print_prompt_and_input_force(); }
                     }
                     _ => {
                         if ch >= 0x20 && ch <= 0x7E {
                             buf_insert(ch);
-                            if !gui::shell_is_dragging() { print_prompt_and_input(); }
+                            if !gui::shell_is_dragging() { print_prompt_and_input_force(); }
                         }
                     }
                 },

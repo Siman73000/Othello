@@ -58,7 +58,6 @@ static mut DRAG_ACTIVE: bool = false;
 static mut DRAG_OFF_X: i32 = 0;
 static mut DRAG_OFF_Y: i32 = 0;
 
-// Taskbar (Windows 11-ish)
 const TASKBAR_H: i32 = 44;
 const TASKBAR_BG: u32 = 0x0B1220;
 const TASKBAR_TOP: u32 = 0x1F2A3A;
@@ -266,7 +265,7 @@ fn icon_for_index(i: usize) -> &'static Icon16 {
     }
 }
 // Theme
-pub const SHELL_BG_COLOR: u32 = 0x0F172A;// window body background
+pub const SHELL_BG_COLOR: u32 = 0x0F172A;
 pub const SHELL_FG_COLOR: u32 = 0xE5E7EB;
 
 const DESKTOP_BG_TOP: u32 = 0x0B1020;
@@ -1382,6 +1381,11 @@ pub fn ui_handle_mouse(ms: MouseState) -> UiAction {
             break UiAction::None;
         };
 
+        // Handle mouse wheel for shell scrolling when pointer is over content
+        if ms.wheel != 0 && SHELL_VISIBLE && point_in_shell_content(ms.x, ms.y) {
+            crate::shell::shell_mouse_wheel(ms.wheel);
+        }
+
         // Move/redraw cursor last (so it stays "Mac smooth" even during repaint)
         cursor_move_to(ms.x, ms.y);
 
@@ -1570,6 +1574,12 @@ fn cursor_move_to(x: i32, y: i32) {
             if !CUR_DRAWN { cursor_redraw(); }
             return;
         }
+        if !CUR_VISIBLE { 
+            CUR_X = nx;
+            CUR_Y = ny;
+            return; 
+        }
+
 
         cursor_restore();
         CUR_X = nx;

@@ -7,6 +7,7 @@
 //! - Rendered full-screen (Windows-11-ish) when gui::UiMode::Login is active
 
 use crate::{gui, registry, time};
+use crate::framebuffer_driver as fb;
 
 const FG: u32 = 0xE5E7EB;
 const BG: u32 = 0x0B1220;
@@ -349,11 +350,73 @@ pub fn render_fullscreen() {
     // Panel width: clamp to the screen with margins (works down to ~360px wide).
     let max_w = (sw - 48).max(320);
     let panel_w = (max_w.min(560)).max(360);
+    // Reserve space for a slightly larger logo banner above the fields (drawn above the panel)
+    let logo_h: i32 = 96;
     let mut panel_h = if unsafe { MODE } == Mode::Create { 320 } else { 280 };
     // Ensure it fits on small screens.
     panel_h = panel_h.min((sh - 32).max(220));
     let px = (sw - panel_w) / 2;
     let py = (sh - panel_h) / 2;
+
+    // Logo (above the panel)
+    const OTHELLO_SRC_W: usize = 739;
+    const OTHELLO_SRC_H: usize = 739;
+    let max_logo_w = (panel_w - 96).max(64);
+    let max_logo_h = logo_h;
+
+    // Compute destination size preserving source aspect ratio.
+    let mut dst_w = max_logo_w;
+    let mut dst_h = (dst_w as i32 * OTHELLO_SRC_H as i32) / OTHELLO_SRC_W as i32;
+    if dst_h > max_logo_h {
+        dst_h = max_logo_h;
+        dst_w = (dst_h as i32 * OTHELLO_SRC_W as i32) / OTHELLO_SRC_H as i32;
+    }
+    if dst_w < 1 { dst_w = 1; }
+    if dst_h < 1 { dst_h = 1; }
+
+    let logo_w = dst_w as i32;
+    let logo_x = px + (panel_w - logo_w) / 2;
+    // place the logo above the panel with a small gap; clamp to screen
+    let mut logo_y = py - logo_h - 12;
+    if logo_y < 12 { logo_y = 12; }
+    let rgba: &'static [u8] = include_bytes!("../wallpapers/Othello.rgba");
+    if logo_w > 0 {
+        let dst_w_u = logo_w as usize;
+        let dst_h_u = logo_h as usize;
+        for yy in 0..dst_h_u {
+            for xx in 0..dst_w_u {
+                let sx = (xx.saturating_mul(OTHELLO_SRC_W) / dst_w_u).min(OTHELLO_SRC_W - 1);
+                let sy = (yy.saturating_mul(OTHELLO_SRC_H) / dst_h_u).min(OTHELLO_SRC_H - 1);
+                let i = (sy.saturating_mul(OTHELLO_SRC_W).saturating_add(sx)).saturating_mul(4);
+                let sr = rgba.get(i + 0).copied().unwrap_or(0) as u32;
+                let sg = rgba.get(i + 1).copied().unwrap_or(0) as u32;
+                let sb = rgba.get(i + 2).copied().unwrap_or(0) as u32;
+                let sa = rgba.get(i + 3).copied().unwrap_or(0) as u32; // 0..255
+
+                // If fully opaque, fast path
+                let dst_x = (logo_x + xx as i32) as usize;
+                let dst_y = (logo_y + yy as i32) as usize;
+                if sa >= 255 {
+                    let color = (sr << 16) | (sg << 8) | sb;
+                    fb::set_pixel(dst_x, dst_y, color);
+                } else if sa == 0 {
+                    // fully transparent: skip
+                } else {
+                    // alpha blend: out = sa*src + (255-sa)*dst
+                    let dstc = fb::get_pixel(dst_x, dst_y);
+                    let dr = ((dstc >> 16) & 0xFF) as u32;
+                    let dg = ((dstc >> 8) & 0xFF) as u32;
+                    let db = (dstc & 0xFF) as u32;
+                    let inv = 255u32 - sa;
+                    let nr = (sa * sr + inv * dr) / 255u32;
+                    let ng = (sa * sg + inv * dg) / 255u32;
+                    let nb = (sa * sb + inv * db) / 255u32;
+                    let color = (nr << 16) | (ng << 8) | nb;
+                    fb::set_pixel(dst_x, dst_y, color);
+                }
+            }
+        }
+    }
 
     // Shadow + panel
     gui::fill_round_rect_nocursor(px + 8, py + 10, panel_w, panel_h, 22, 0x000000);
