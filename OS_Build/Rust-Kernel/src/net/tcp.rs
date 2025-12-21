@@ -44,7 +44,15 @@ fn tcp_checksum(src_ip: [u8;4], dst_ip: [u8;4], seg: &[u8]) -> u16 {
 }
 
 fn route_next_hop(src_ip: [u8;4], dst_ip: [u8;4], mask: [u8;4], gw: [u8;4]) -> [u8;4] {
-    if super::same_subnet(src_ip, dst_ip, mask) || gw == [0,0,0,0] { dst_ip } else { gw }
+    // If mask is 0.0.0.0 (some DHCP failures), treat everything as off-subnet and use the gateway.
+    let mask_is_zero = mask == [0,0,0,0];
+    if !mask_is_zero && (super::same_subnet(src_ip, dst_ip, mask) || gw == [0,0,0,0]) {
+        dst_ip
+    } else if gw != [0,0,0,0] {
+        gw
+    } else {
+        dst_ip
+    }
 }
 
 pub struct TcpStream {
@@ -243,25 +251,29 @@ impl TcpStream {
             return true;
         }
 
-        // ACK-only packets still indicate progress (e.g., ACK of our request
-        // can arrive shortly before the first response payload).
-        if payload.is_empty() && (flags & 0x10) != 0 {
-            return true;
-        }
+        if seq_r == self.ack {
+    let mut did_any = false;
 
-        if !payload.is_empty() && seq_r == self.ack {
-            self.rx.extend_from_slice(payload);
-            self.ack = self.ack.wrapping_add(payload.len() as u32);
-            let _ = self.send_ack();
-            return true;
-        }
+    if !payload.is_empty() {
+        self.rx.extend_from_slice(payload);
+        self.ack = self.ack.wrapping_add(payload.len() as u32);
+        did_any = true;
+    }
 
-        if (flags & 0x01) != 0 && seq_r == self.ack {
-            self.ack = self.ack.wrapping_add(1);
-            let _ = self.send_ack();
-            self.fin_seen = true;
-            return true;
-        }
+    // FIN can be piggy-backed on the last data segment. If we don't account for it,
+    // higher layers can hang forever waiting for EOF.
+    if (flags & 0x01) != 0 {
+        self.ack = self.ack.wrapping_add(1);
+        self.fin_seen = true;
+        did_any = true;
+    }
+
+    if did_any {
+        let _ = self.send_ack();
+        return true;
+    }
+}
+
 
         false
     }
@@ -286,10 +298,8 @@ impl TcpStream {
         let src = [frame[ip_off + 12], frame[ip_off + 13], frame[ip_off + 14], frame[ip_off + 15]];
         let dst = [frame[ip_off + 16], frame[ip_off + 17], frame[ip_off + 18], frame[ip_off + 19]];
         if dst != our_ip { return None; }
-        // QEMU user networking (slirp/libslirp) can sometimes present replies with the
-        // gateway IP as the L3 source. Accept either the expected remote IP or the gateway.
-        let gw = unsafe { super::NET.cfg.gateway };
-        if src != remote_ip && src != gw { return None; }
+        // Some user-mode NATs / emulations can present replies with unexpected L3 sources.
+        // As long as it is destined to us and the TCP ports match, accept it.
 
         let tcp_off = ip_off + ihl;
         let sp = u16::from_be_bytes([frame[tcp_off], frame[tcp_off + 1]]);

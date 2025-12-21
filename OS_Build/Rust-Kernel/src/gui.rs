@@ -487,6 +487,19 @@ pub fn clear_shell_content_and_frame() {
     }
 }
 
+/// Same as `clear_shell_content_and_frame()`, but does NOT touch cursor state.
+///
+/// Use this when you want to batch multiple draws inside one begin_paint()/end_paint()
+/// without flicker or cursor trails.
+pub fn clear_shell_content_and_frame_nocursor() {
+    unsafe {
+        if !SHELL_VISIBLE { return; }
+        draw_shell_window_frame();
+        clear_shell_content_nocursor();
+    }
+}
+
+
 fn clear_shell_content_nocursor() {
     unsafe {
         let r = SHELL_CONTENT;

@@ -374,8 +374,8 @@ $qemuArgs = @(
     "-drive", "format=raw,file=$diskImg,if=ide",
     "-boot", "c",
     "-serial", "stdio",
-    "-device", "rtl8139,netdev=n0",
-    "-netdev", "user,id=n0",
+    "-device", "rtl8139,netdev=n1",
+    "-netdev", "user,id=n1",
     "-vga", "std",
     # SDL display with GL; you can add '-full-screen' as another arg if desired
     "-display", "sdl",

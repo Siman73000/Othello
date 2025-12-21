@@ -169,7 +169,7 @@ impl Rtl8139 {
             // - accept physical match (bit1) + broadcast (bit3)
             // - wrap (bit7)
             // - MXDMA = unlimited (bits 10:8 = 111)
-            let rcr = (1u32 << 1) | (1u32 << 3) | (1u32 << 7) | (0x7u32 << 8);
+            let rcr = (1u32 << 0) | (1u32 << 1) | (1u32 << 3) | (1u32 << 7) | (0x7u32 << 8);
             outl(io + RCR, rcr);
 
             // TX config: MXDMA unlimited
@@ -199,8 +199,18 @@ impl Rtl8139 {
             return false;
         }
 
-        let idx = self.tx_cur % NUM_TX;
-        self.tx_cur = (self.tx_cur + 1) % NUM_TX;
+        // Pick a TX descriptor that looks idle. Some emulations will drop frames if we
+// stomp an in-flight descriptor.
+let mut idx = self.tx_cur % NUM_TX;
+for _ in 0..NUM_TX {
+    let tsd = unsafe { inl(self.io + TSD0 + (idx as u16) * 4) };
+    // OWN (bit13) is typically set while the NIC owns the descriptor.
+    // If an emulation uses different semantics, this just becomes a best-effort heuristic.
+    let own = (tsd & (1u32 << 13)) != 0;
+    if !own { break; }
+    idx = (idx + 1) % NUM_TX;
+}
+self.tx_cur = (idx + 1) % NUM_TX;
 
         unsafe {
             let buf = &mut TX_BUFFERS[idx];
@@ -245,19 +255,16 @@ impl Rtl8139 {
                 return None;
             }
 
-            // The reported length may or may not include a trailing 4-byte CRC/FCS.
-            // Never blindly subtract 4; doing so truncates valid IPv4 payload and
-            // breaks TCP/HTTP parsing.
+            // Some emulators/NICs report the length including the 4-byte Ethernet FCS (CRC),
+            // others do not. If we blindly subtract 4 we can truncate ARP/IP packets and then
+            // everything (ARP, DHCP, TCP) mysteriously times out.
             //
             // Strategy:
-            // 1) Copy the reported length (clamped).
-            // 2) Infer the "real" L2 length using EtherType + IPv4 total-length.
-
-            // Frame begins right after header.
+            // 1) Copy exactly `len_raw` bytes into RX_SCRATCH (bounded).
+            // 2) Trim the returned slice using L2 ethertype + IPv4 total length when possible.
             let start = off + 4;
 
-            // Copy linearly out of the RX buffer using the overflow area.
-            let mut copy_len = len_raw.min(RX_SCRATCH.len());
+            let copy_len = len_raw.min(RX_SCRATCH.len());
             if start + copy_len <= ring.len() {
                 RX_SCRATCH[..copy_len].copy_from_slice(&ring[start..start + copy_len]);
             } else {
@@ -270,9 +277,6 @@ impl Rtl8139 {
                 }
             }
 
-            // Infer actual L2 length (exclude FCS if present).
-            copy_len = infer_l2_len(&RX_SCRATCH[..copy_len]).unwrap_or(copy_len);
-
             // Advance rx ptr: header(4) + len_raw, aligned to dword, wrap at 8KiB.
             self.advance_rx(align4(4 + len_raw));
 
@@ -284,8 +288,38 @@ impl Rtl8139 {
                 return None;
             }
 
+            // Trim padding/FCS for the consumer.
+            let mut out_len = copy_len.max(14);
+
+            if copy_len >= 14 {
+                let mut l2 = 14usize;
+                let mut ethertype = u16::from_be_bytes([RX_SCRATCH[12], RX_SCRATCH[13]]);
+                if ethertype == 0x8100 && copy_len >= 18 {
+                    ethertype = u16::from_be_bytes([RX_SCRATCH[16], RX_SCRATCH[17]]);
+                    l2 = 18;
+                }
+
+                if ethertype == 0x0806 {
+                    // ARP header is 28 bytes after Ethernet/VLAN header.
+                    let want = l2 + 28;
+                    if want <= copy_len { out_len = want; }
+                } else if ethertype == 0x0800 && copy_len >= l2 + 20 {
+                    // IPv4: use Total Length field to trim trailing pad/CRC.
+                    let ip = l2;
+                    let ver_ihl = RX_SCRATCH[ip];
+                    if (ver_ihl >> 4) == 4 {
+                        let ihl = ((ver_ihl & 0x0F) as usize) * 4;
+                        if ihl >= 20 && copy_len >= l2 + ihl + 4 {
+                            let total = u16::from_be_bytes([RX_SCRATCH[ip + 2], RX_SCRATCH[ip + 3]]) as usize;
+                            let want = l2 + total;
+                            if want >= 14 && want <= copy_len { out_len = want; }
+                        }
+                    }
+                }
+            }
+
             NET.stats.rx_packets = NET.stats.rx_packets.wrapping_add(1);
-            Some(&RX_SCRATCH[..copy_len])
+            Some(&RX_SCRATCH[..out_len.min(copy_len)])
         }
     }
 
@@ -300,34 +334,6 @@ impl Rtl8139 {
 
 #[inline(always)]
 fn align4(x: usize) -> usize { (x + 3) & !3 }
-
-// Infer the actual Ethernet frame length (excluding optional FCS) by looking at
-// EtherType and (for IPv4) the total length field.
-fn infer_l2_len(frame: &[u8]) -> Option<usize> {
-    if frame.len() < 14 { return None; }
-
-    // VLAN tagged frames have EtherType 0x8100 at bytes 12..14, with real type at 16..18.
-    let mut l2 = 14usize;
-    let mut ethertype = u16::from_be_bytes([frame[12], frame[13]]);
-    if ethertype == 0x8100 {
-        if frame.len() < 18 { return None; }
-        ethertype = u16::from_be_bytes([frame[16], frame[17]]);
-        l2 = 18;
-    }
-
-    match ethertype {
-        0x0800 => { // IPv4
-            if frame.len() < l2 + 20 { return None; }
-            let ihl = (frame[l2] & 0x0F) as usize;
-            if ihl < 5 { return None; }
-            let total = u16::from_be_bytes([frame[l2 + 2], frame[l2 + 3]]) as usize;
-            let want = l2 + total;
-            if want <= frame.len() { Some(want) } else { None }
-        }
-        0x0806 => Some(l2 + 28), // ARP
-        _ => None,
-    }
-}
 
 // -----------------------------------------------------------------------------
 // Global net state
