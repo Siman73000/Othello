@@ -98,7 +98,7 @@ impl TcpStream {
             let mut spins: u32 = 0;
             while spins < timeout_spins {
                 spins = spins.wrapping_add(1);
-                unsafe { time::cpu_pause(); }
+                time::cpu_pause();
 
                 if let Some((flags, seq_r, ack_r, payload)) = Self::poll_for_segment(src_ip, remote_ip, local_port, remote_port) {
                     if (flags & 0x04) != 0 { return Err(TcpError::Reset); } // RST
@@ -180,7 +180,7 @@ impl TcpStream {
             let mut progressed = false;
             while spins < timeout_spins {
                 spins = spins.wrapping_add(1);
-                unsafe { time::cpu_pause(); }
+                time::cpu_pause();
                 if self.poll_once() {
                     progressed = true;
                     got_any = true;
@@ -278,7 +278,7 @@ impl TcpStream {
         false
     }
 
-    fn poll_for_segment(our_ip: [u8;4], remote_ip: [u8;4], local_port: u16, remote_port: u16)
+    fn poll_for_segment(our_ip: [u8;4], _remote_ip: [u8;4], local_port: u16, remote_port: u16)
         -> Option<(u16, u32, u32, &'static [u8])>
     {
         let frame_opt = unsafe { super::NET.rtl.as_mut().unwrap().poll_recv() };
@@ -295,7 +295,7 @@ impl TcpStream {
         if frame.len() < ip_off + ihl + 20 { return None; }
         if frame[ip_off + 9] != 6 { return None; }
 
-        let src = [frame[ip_off + 12], frame[ip_off + 13], frame[ip_off + 14], frame[ip_off + 15]];
+        let _src = [frame[ip_off + 12], frame[ip_off + 13], frame[ip_off + 14], frame[ip_off + 15]];
         let dst = [frame[ip_off + 16], frame[ip_off + 17], frame[ip_off + 18], frame[ip_off + 19]];
         if dst != our_ip { return None; }
         // Some user-mode NATs / emulations can present replies with unexpected L3 sources.

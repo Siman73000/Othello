@@ -118,8 +118,8 @@ fn walk(doc: &Document, idx: usize, ctx: &RenderCtx<'_>, out: &mut Vec<String>, 
             // anchors: if it has href, we render as "text (href)".
             let href = el.attrs.iter().find(|(k,_)| k == "href").map(|(_,v)| v.as_str());
 
-            let mut before_len = out.len();
-            let cur_before = cur.clone();
+            let before_len = out.len();
+            //let cur_before = cur.clone();
 
             for &ch in &doc.nodes[idx].children {
                 walk(doc, ch, ctx, out, cur);

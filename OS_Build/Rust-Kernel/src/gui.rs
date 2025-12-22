@@ -5,6 +5,7 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use crate::{framebuffer_driver as fb, font, time};
+use core::ptr;
 use crate::mouse::MouseState;
 use crate::serial_write_str;
 
@@ -206,7 +207,6 @@ static ICON_FILES: Icon16 = Icon16 {
     ],
 };
 
-#[link_section = ".text"]
 #[link_section = ".text"]
 static ICON_WEB: Icon16 = Icon16 {
     outline: [
@@ -474,11 +474,9 @@ fn recompute_dock_layout() {
 }
 
 pub fn clear_shell_content() {
-    unsafe {
-        begin_paint();
-        clear_shell_content_nocursor();
-        end_paint();
-    }
+    begin_paint();
+    clear_shell_content_nocursor();
+    end_paint();
 }
 
 /// Clear the shell content *and* ensure the window frame exists.
@@ -608,7 +606,7 @@ fn paint_taskbar_and_dock() {
             let r = DOCK_ICONS[i];
 
             let hovered = r.contains(CUR_X, CUR_Y);
-            let shell_active = (i == 0 && SHELL_VISIBLE);
+            let shell_active = i == 0 && SHELL_VISIBLE;
 
             let bg = if shell_active {
                 ICON_ACTIVE
@@ -641,7 +639,7 @@ fn paint_taskbar_and_dock() {
         let dt = time::rtc_now();
         let mut buf = [0u8; 32];
         let n = time::format_datetime(&mut buf, dt);
-        let s = unsafe { core::str::from_utf8_unchecked(&buf[..n]) };
+        let s = core::str::from_utf8_unchecked(&buf[..n]);
 
         let text_w = (n as i32) * (font::FONT_W as i32);
         let x = (SCREEN_W - 16 - text_w).max(12);
@@ -655,11 +653,9 @@ fn paint_taskbar_and_dock() {
 
 /// Redraw just the bottom taskbar + dock + clock (does NOT touch the shell window contents).
 pub fn redraw_taskbar() {
-    unsafe {
-        begin_paint();
-        paint_taskbar_and_dock();
-        end_paint();
-    }
+    begin_paint();
+    paint_taskbar_and_dock();
+    end_paint();
 }
 
 fn draw_desktop() {
@@ -687,20 +683,20 @@ fn draw_desktop() {
 
 #[inline]
 fn save_region(r: Rect) -> Option<SavedRegion> {
-    unsafe {
-        let Some(r) = clip_to_screen(r) else { return None; };
-        let w = r.w.max(0) as usize;
-        let h = r.h.max(0) as usize;
-        if w == 0 || h == 0 { return None; }
 
-        let mut buf = Vec::with_capacity(w.saturating_mul(h));
-        for yy in 0..h {
-            for xx in 0..w {
-                buf.push(fb::get_pixel((r.x as usize) + xx, (r.y as usize) + yy));
-            }
+    let Some(r) = clip_to_screen(r) else { return None; };
+    let w = r.w.max(0) as usize;
+    let h = r.h.max(0) as usize;
+    if w == 0 || h == 0 { return None; }
+
+    let mut buf = Vec::with_capacity(w.saturating_mul(h));
+    for yy in 0..h {
+        for xx in 0..w {
+            buf.push(fb::get_pixel((r.x as usize) + xx, (r.y as usize) + yy));
         }
-        Some(SavedRegion { x: r.x, y: r.y, w: r.w, h: r.h, buf })
     }
+    Some(SavedRegion { x: r.x, y: r.y, w: r.w, h: r.h, buf })
+
 }
 
 #[inline]
@@ -721,7 +717,11 @@ fn close_context_menu() {
     unsafe {
         if !CTX_OPEN { return; }
         begin_paint();
-        if let Some(s) = CTX_SAVE.take() {
+        // Move out CTX_SAVE without creating a `&mut` reference to the
+        // `static mut`. Use a raw pointer replacement to take the value.
+        let p: *mut Option<SavedRegion> = ptr::addr_of_mut!(CTX_SAVE);
+        let old = ptr::replace(p, None);
+        if let Some(s) = old {
             restore_region(&s);
         }
         CTX_OPEN = false;
@@ -779,7 +779,10 @@ fn close_wallpaper_picker() {
     unsafe {
         if !PICKER_OPEN { return; }
         begin_paint();
-        if let Some(s) = PICKER_SAVE.take() {
+        // Take PICKER_SAVE without creating a `&mut` to the `static mut`.
+        let pps: *mut Option<SavedRegion> = ptr::addr_of_mut!(PICKER_SAVE);
+        let oldp = ptr::replace(pps, None);
+        if let Some(s) = oldp {
             restore_region(&s);
         }
         PICKER_OPEN = false;
@@ -802,7 +805,7 @@ fn draw_wallpaper_preview(dst_x: i32, dst_y: i32, pw: i32, ph: i32, idx: usize) 
 
 fn draw_wallpaper_picker() {
     unsafe {
-        let r = PICKER_RECT;
+        let r: Rect = ptr::read_volatile(&raw const PICKER_RECT as *const _);
         // Shadow + border + body
         fill_round_rect(r.x + 6, r.y + 8, r.w, r.h, 14, 0x000000);
         fill_round_rect(r.x, r.y, r.w, r.h, 14, 0x334155);
@@ -814,7 +817,7 @@ fn draw_wallpaper_picker() {
         draw_text_nocursor(r.x + 14, r.y + 11, "Desktop background", 0xF3F4F6, 0x111827);
 
         // Close button
-        let c = PICKER_CLOSE;
+    let c: Rect = ptr::read_volatile(&raw const PICKER_CLOSE as *const _);
         fill_round_rect(c.x, c.y, c.w, c.h, 8, 0xEF4444);
         draw_text_nocursor(c.x + 6, c.y + 2, "X", 0xFFFFFF, 0xEF4444);
 
@@ -1160,8 +1163,11 @@ pub fn ui_handle_mouse(ms: MouseState) -> UiAction {
             // Overlays: wallpaper picker + desktop context menu
             // ----------------------------------------------------------------
             if PICKER_OPEN {
+                // Read statics into local copies to avoid creating shared refs to `static mut`.
+                let picker_rect: Rect = ptr::read_volatile(&raw const PICKER_RECT as *const _);
+                let picker_close: Rect = ptr::read_volatile(&raw const PICKER_CLOSE as *const _);
                 if left_edge {
-                    if PICKER_CLOSE.contains(ms.x, ms.y) {
+                    if picker_close.contains(ms.x, ms.y) {
                         close_wallpaper_picker();
                         break UiAction::None;
                     }
@@ -1171,14 +1177,14 @@ pub fn ui_handle_mouse(ms: MouseState) -> UiAction {
                         repaint_visible_desktop_after_wallpaper_change();
                         break UiAction::None;
                     }
-                    if !PICKER_RECT.contains(ms.x, ms.y) {
+                    if !picker_rect.contains(ms.x, ms.y) {
                         close_wallpaper_picker();
                         break UiAction::None;
                     }
                 }
 
                 // Right-click anywhere outside closes the picker.
-                if right_edge && !PICKER_RECT.contains(ms.x, ms.y) {
+                if right_edge && !picker_rect.contains(ms.x, ms.y) {
                     close_wallpaper_picker();
                     break UiAction::None;
                 }
@@ -1187,25 +1193,30 @@ pub fn ui_handle_mouse(ms: MouseState) -> UiAction {
             }
 
             if CTX_OPEN {
+                // Copy statics to local variables to avoid shared refs to `static mut`.
+                let ctx_item_bg: Rect = ptr::read_volatile(&raw const CTX_ITEM_BG as *const _);
+                let ctx_rect: Rect = ptr::read_volatile(&raw const CTX_RECT as *const _);
                 if left_edge {
-                    if CTX_ITEM_BG.contains(ms.x, ms.y) {
+                    if ctx_item_bg.contains(ms.x, ms.y) {
                         close_context_menu();
                         open_wallpaper_picker();
                         break UiAction::None;
                     }
-                    if !CTX_RECT.contains(ms.x, ms.y) {
+                    if !ctx_rect.contains(ms.x, ms.y) {
                         close_context_menu();
                         break UiAction::None;
                     }
                 }
 
                 // Reposition menu on right-click elsewhere.
-                if right_edge && !CTX_RECT.contains(ms.x, ms.y) {
+                if right_edge && !ctx_rect.contains(ms.x, ms.y) {
                     close_context_menu();
                     recompute_dock_layout();
+                    let dock_rect: Rect = ptr::read_volatile(&raw const DOCK_RECT as *const _);
+                    let shell_outer: Rect = ptr::read_volatile(&raw const SHELL_OUTER as *const _);
                     let on_desktop = ms.y >= 32
-                        && !DOCK_RECT.contains(ms.x, ms.y)
-                        && !(SHELL_VISIBLE && shell_paint_rect(SHELL_OUTER).contains(ms.x, ms.y));
+                        && !dock_rect.contains(ms.x, ms.y)
+                        && !(SHELL_VISIBLE && shell_paint_rect(shell_outer).contains(ms.x, ms.y));
                     if on_desktop {
                         open_context_menu_at(ms.x, ms.y);
                     }
@@ -1218,9 +1229,13 @@ pub fn ui_handle_mouse(ms: MouseState) -> UiAction {
             // Open context menu on desktop right-click.
             if right_edge {
                 recompute_dock_layout();
+                // Read statics into locals to avoid shared refs to `static mut`.
+                let dock_rect: Rect = ptr::read_volatile(&raw const DOCK_RECT as *const _);
+                let shell_outer: Rect = ptr::read_volatile(&raw const SHELL_OUTER as *const _);
+                let shell_vis: bool = ptr::read_volatile(&raw const SHELL_VISIBLE as *const _);
                 let on_desktop = ms.y >= 32
-                    && !DOCK_RECT.contains(ms.x, ms.y)
-                    && !(SHELL_VISIBLE && shell_paint_rect(SHELL_OUTER).contains(ms.x, ms.y));
+                    && !dock_rect.contains(ms.x, ms.y)
+                    && !(shell_vis && shell_paint_rect(shell_outer).contains(ms.x, ms.y));
                 if on_desktop {
                     open_context_menu_at(ms.x, ms.y);
                     break UiAction::None;
@@ -1230,7 +1245,10 @@ pub fn ui_handle_mouse(ms: MouseState) -> UiAction {
             // Window traffic lights (close/min/max) - paint on click
             // ----------------------------------------------------------------
             if SHELL_VISIBLE && left_edge {
-                if BTN_CLOSE.contains(ms.x, ms.y) {
+                let btn_close: Rect = ptr::read_volatile(&raw const BTN_CLOSE as *const _);
+                let btn_min: Rect = ptr::read_volatile(&raw const BTN_MIN as *const _);
+                let btn_max: Rect = ptr::read_volatile(&raw const BTN_MAX as *const _);
+                if btn_close.contains(ms.x, ms.y) {
                     SHELL_VISIBLE = false;
                     DRAG_ACTIVE = false;
 
@@ -1240,7 +1258,7 @@ pub fn ui_handle_mouse(ms: MouseState) -> UiAction {
 	                            break 'act UiAction::ShellVisibilityChanged;
                 }
 
-                if BTN_MIN.contains(ms.x, ms.y) {
+                if btn_min.contains(ms.x, ms.y) {
                     SHELL_VISIBLE = false;
                     DRAG_ACTIVE = false;
 
@@ -1249,7 +1267,7 @@ pub fn ui_handle_mouse(ms: MouseState) -> UiAction {
 	                            break 'act UiAction::ShellVisibilityChanged;
                 }
 
-                if BTN_MAX.contains(ms.x, ms.y) {
+                if btn_max.contains(ms.x, ms.y) {
                     if !SHELL_MAXIMIZED {
                         SHELL_RESTORE = SHELL_OUTER;
                         // Fill the usable area (below topbar, above dock)
@@ -1279,8 +1297,10 @@ pub fn ui_handle_mouse(ms: MouseState) -> UiAction {
             // Dock: toggle shell visibility on leftmost icon
             // ----------------------------------------------------------------
             if left_edge {
+                // Copy DOCK_ICONS array to avoid shared refs to static mut
+                let dock_icons: [Rect; DOCK_ICON_COUNT] = ptr::read_volatile(&raw const DOCK_ICONS as *const _);
                 for i in 0..DOCK_ICON_COUNT {
-                    if DOCK_ICONS[i].contains(ms.x, ms.y) {
+                    if dock_icons[i].contains(ms.x, ms.y) {
                 if i == 0 {
                             // Terminal / Shell icon:
                             // If the shell is hidden, show it and draw the frame.
@@ -1323,8 +1343,12 @@ pub fn ui_handle_mouse(ms: MouseState) -> UiAction {
             // Start dragging from title bar (not on buttons)
             // ----------------------------------------------------------------
             if SHELL_VISIBLE && left_edge && !SHELL_MAXIMIZED {
-                let on_title = SHELL_TITLE.contains(ms.x, ms.y);
-                let on_btn = BTN_CLOSE.contains(ms.x, ms.y) || BTN_MIN.contains(ms.x, ms.y) || BTN_MAX.contains(ms.x, ms.y);
+                let shell_title: Rect = ptr::read_volatile(&raw const SHELL_TITLE as *const _);
+                let btn_close: Rect = ptr::read_volatile(&raw const BTN_CLOSE as *const _);
+                let btn_min: Rect = ptr::read_volatile(&raw const BTN_MIN as *const _);
+                let btn_max: Rect = ptr::read_volatile(&raw const BTN_MAX as *const _);
+                let on_title = shell_title.contains(ms.x, ms.y);
+                let on_btn = btn_close.contains(ms.x, ms.y) || btn_min.contains(ms.x, ms.y) || btn_max.contains(ms.x, ms.y);
                 if on_title && !on_btn {
                     DRAG_ACTIVE = true;
 	                    DRAG_OFF_X = ms.x - SHELL_OUTER.x;
@@ -1343,7 +1367,8 @@ pub fn ui_handle_mouse(ms: MouseState) -> UiAction {
                 // clamp window on screen (keep above dock)
                 recompute_dock_layout();
                 let max_x = (SCREEN_W - old.w).max(0);
-                let max_y = (DOCK_RECT.y - old.h - 12).max(32);
+                let dock_rect: Rect = ptr::read_volatile(&raw const DOCK_RECT as *const _);
+                let max_y = (dock_rect.y - old.h - 12).max(32);
                 nx = nx.clamp(0, max_x);
                 ny = ny.clamp(32, max_y);
 

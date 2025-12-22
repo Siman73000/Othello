@@ -85,7 +85,7 @@ fn align_up(x: u64, a: u64) -> u64 {
 }
 
 // --- Paging helpers (x86_64)
-const PML4_ENTRIES: usize = 512;
+//const PML4_ENTRIES: usize = 512;
 const PAGE_SIZE: u64 = 4096;
 const PAGE_2M: u64 = 2 * 1024 * 1024;
 

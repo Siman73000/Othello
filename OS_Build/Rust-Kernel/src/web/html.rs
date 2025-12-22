@@ -146,7 +146,7 @@ pub fn parse(input: &[u8]) -> ParsedPage {
         }
 
         // start tag
-        let (name, mut ni) = read_ident(input, i);
+        let (name, ni) = read_ident(input, i);
         let tag = lower_ascii(&name);
         i = ni;
 
@@ -166,7 +166,7 @@ pub fn parse(input: &[u8]) -> ParsedPage {
                 break;
             }
 
-            let (k, mut ki) = read_ident(input, i);
+            let (k, ki) = read_ident(input, i);
             i = ki;
             let key = lower_ascii(&k);
             while i < input.len() && is_ws(input[i]) { i += 1; }

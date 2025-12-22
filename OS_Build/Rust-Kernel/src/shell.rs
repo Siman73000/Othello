@@ -1,9 +1,10 @@
 #![allow(dead_code)]
 
 use core::arch::asm;
+use core::ptr;
 use alloc::vec::Vec;
 
-use crate::{framebuffer_driver as fb, gui, keyboard, login, mouse, net, regedit, editor, browser, fs, time};
+use crate::{framebuffer_driver as fb, gui, keyboard, login, mouse, net, regedit, editor, fs, time};
 use crate::serial_write_str;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -115,6 +116,9 @@ const PAD: i32 = 8;
 const CH_W: i32 = 8;
 const CH_H: i32 = 16;
 
+// Input buffer capacity (avoid taking a reference to the static array length)
+const INBUF_CAP: usize = 160;
+
 static mut TERM_X: i32 = 0;
 static mut TERM_Y0: i32 = 0;
 static mut TERM_W: i32 = 0;
@@ -135,6 +139,48 @@ static mut SCROLLBACK_POS: usize = 0;
 // If true the user has interacted with scrollback (wheel) and we should not
 // auto-pin to bottom until the user types or a command is executed.
 static mut SCROLLBACK_USER_SCROLLED: bool = false;
+
+// Helper: ensure SCROLLBACK exists, provide exclusive access to it by moving
+// the Option<Vec<...>> out of the static, passing a mutable reference to the
+// closure, then putting the value back. This avoids creating `&`/`&mut`
+// references to a `static mut` value which trigger Rust-2024 warnings.
+fn with_scrollback_create<F, R>(f: F) -> R
+where
+    F: FnOnce(&mut Vec<Vec<u8>>) -> R,
+{
+    unsafe {
+        let p: *mut Option<Vec<Vec<u8>>> = ptr::addr_of_mut!(SCROLLBACK);
+        let mut owned = ptr::replace(p, None);
+        if owned.is_none() {
+            owned = Some(Vec::new());
+            SCROLLBACK_POS = 0;
+        }
+        let mut sb = owned.unwrap();
+        let res = f(&mut sb);
+        ptr::replace(p, Some(sb));
+        res
+    }
+}
+
+// Helper variant: run the closure only if SCROLLBACK is present. Returns
+// `None` if SCROLLBACK was absent; otherwise returns `Some(result)`.
+fn with_scrollback_if_some<F, R>(f: F) -> Option<R>
+where
+    F: FnOnce(&mut Vec<Vec<u8>>) -> R,
+{
+    unsafe {
+        let p: *mut Option<Vec<Vec<u8>>> = ptr::addr_of_mut!(SCROLLBACK);
+        // Read a copy of the option atomically (no borrow created)
+        let had = ptr::read_volatile(p as *const Option<Vec<Vec<u8>>>);
+        if had.is_none() {
+            return None;
+        }
+        let mut owned = ptr::replace(p, None).unwrap();
+        let res = f(&mut owned);
+        ptr::replace(p, Some(owned));
+        Some(res)
+    }
+}
 
 fn layout() {
     unsafe {
@@ -316,32 +362,27 @@ fn scroll_if_needed() {
     }
 }
 
-fn print_line(bytes: &[u8], fg: u32) {
+fn print_line(bytes: &[u8], _fg: u32) {
     if !gui::shell_is_visible() { return; }
     unsafe {
-        // Ensure scrollback exists
-        if SCROLLBACK.is_none() {
-            SCROLLBACK = Some(Vec::new());
-            SCROLLBACK_POS = 0;
-        }
+        // Append to or create scrollback via helper that avoids `static mut` borrows.
+        with_scrollback_create(|sb| {
+            // Append the raw byte line to scrollback. We'll perform wrapping when
+            // redrawing the viewport.
+            sb.push(bytes.to_vec());
+            if sb.len() > SCROLLBACK_MAX_LINES {
+                // drop oldest
+                sb.remove(0);
+                if SCROLLBACK_POS > 0 { SCROLLBACK_POS = SCROLLBACK_POS.saturating_sub(1); }
+            }
 
-        let sb = SCROLLBACK.as_mut().unwrap();
-
-        // Append the raw byte line to scrollback. We'll perform wrapping when
-        // redrawing the viewport.
-        sb.push(bytes.to_vec());
-        if sb.len() > SCROLLBACK_MAX_LINES {
-            // drop oldest
-            sb.remove(0);
-            if SCROLLBACK_POS > 0 { SCROLLBACK_POS = SCROLLBACK_POS.saturating_sub(1); }
-        }
-
-        // If the user is at the bottom (showing latest), keep viewport pinned to bottom
-        let visible_lines_est = (TERM_H / CH_H).max(1) as usize;
-        if sb.len() <= visible_lines_est || SCROLLBACK_POS + visible_lines_est >= sb.len() {
-            // show last page
-            SCROLLBACK_POS = sb.len().saturating_sub(visible_lines_est);
-        }
+            // If the user is at the bottom (showing latest), keep viewport pinned to bottom
+            let visible_lines_est = (TERM_H / CH_H).max(1) as usize;
+            if sb.len() <= visible_lines_est || SCROLLBACK_POS + visible_lines_est >= sb.len() {
+                // show last page
+                SCROLLBACK_POS = sb.len().saturating_sub(visible_lines_est);
+            }
+        });
 
         // Redraw the terminal viewport from scrollback
         redraw_terminal_viewport();
@@ -349,22 +390,19 @@ fn print_line(bytes: &[u8], fg: u32) {
 }
 
 // Force append and scroll viewport to bottom (used when a command is entered)
-fn print_line_force(bytes: &[u8], fg: u32) {
+fn print_line_force(bytes: &[u8], _fg: u32) {
     if !gui::shell_is_visible() { return; }
     unsafe {
-        if SCROLLBACK.is_none() {
-            SCROLLBACK = Some(Vec::new());
-            SCROLLBACK_POS = 0;
-        }
-        let sb = SCROLLBACK.as_mut().unwrap();
-        sb.push(bytes.to_vec());
-        if sb.len() > SCROLLBACK_MAX_LINES {
-            sb.remove(0);
-        }
-        let visible_lines_est = (TERM_H / CH_H).max(1) as usize;
-        SCROLLBACK_POS = sb.len().saturating_sub(visible_lines_est);
-        // Reset user-scrolled flag since we pinned to bottom programmatically.
-        SCROLLBACK_USER_SCROLLED = false;
+        with_scrollback_create(|sb| {
+            sb.push(bytes.to_vec());
+            if sb.len() > SCROLLBACK_MAX_LINES {
+                sb.remove(0);
+            }
+            let visible_lines_est = (TERM_H / CH_H).max(1) as usize;
+            SCROLLBACK_POS = sb.len().saturating_sub(visible_lines_est);
+            // Reset user-scrolled flag since we pinned to bottom programmatically.
+            SCROLLBACK_USER_SCROLLED = false;
+        });
         redraw_terminal_viewport();
     }
 }
@@ -373,19 +411,28 @@ fn print_line_force(bytes: &[u8], fg: u32) {
 // moved the viewport (caller may want to avoid redundant draws).
 fn ensure_scrollback_at_bottom(force: bool) -> bool {
     unsafe {
-        if SCROLLBACK.is_none() { return false; }
-        // If user has scrolled and we are not forcing, do nothing.
-        if SCROLLBACK_USER_SCROLLED && !force { return false; }
-        let sb = SCROLLBACK.as_ref().unwrap();
-        let visible_lines_est = (TERM_H / CH_H).max(1) as usize;
-        let new_pos = sb.len().saturating_sub(visible_lines_est);
-        if SCROLLBACK_POS != new_pos {
-            SCROLLBACK_POS = new_pos;
-            // If we are forcing, clear the user-scrolled flag.
-            if force { SCROLLBACK_USER_SCROLLED = false; }
-            return true;
+        // If SCROLLBACK is absent, behave like previous code and return false.
+        let p: *mut Option<Vec<Vec<u8>>> = ptr::addr_of_mut!(SCROLLBACK);
+        let had = ptr::read_volatile(p as *const Option<Vec<Vec<u8>>>);
+        if had.is_none() { return false; }
+
+        // Take ownership, inspect/modify, then put it back.
+        let owned = ptr::replace(p, None).unwrap();
+        if SCROLLBACK_USER_SCROLLED && !force {
+            ptr::replace(p, Some(owned));
+            return false;
         }
-        return false;
+        let visible_lines_est = (TERM_H / CH_H).max(1) as usize;
+        let new_pos = owned.len().saturating_sub(visible_lines_est);
+        let moved = if SCROLLBACK_POS != new_pos {
+            SCROLLBACK_POS = new_pos;
+            if force { SCROLLBACK_USER_SCROLLED = false; }
+            true
+        } else {
+            false
+        };
+        ptr::replace(p, Some(owned));
+        moved
     }
 }
 
@@ -395,16 +442,19 @@ fn redraw_terminal_viewport_nocursor() {
     unsafe {
         // Clear terminal area
         clear_rect(TERM_X, TERM_Y0, TERM_W, TERM_H, BG);
-
         // Draw lines from scrollback starting at SCROLLBACK_POS (nocursor drawing)
-        if let Some(sb) = &SCROLLBACK {
+        let p: *mut Option<Vec<Vec<u8>>> = ptr::addr_of_mut!(SCROLLBACK);
+        let had = ptr::read_volatile(p as *const Option<Vec<Vec<u8>>>);
+        if had.is_some() {
+            let owned = ptr::replace(p, None).unwrap();
             let mut y = TERM_Y0;
-            for i in SCROLLBACK_POS..sb.len() {
+            for i in SCROLLBACK_POS..owned.len() {
                 if y > TERM_Y0 + TERM_H - CH_H { break; }
                 // draw_bytes_line_nocursor returns number of wrapped lines written
-                let lines = draw_bytes_line_nocursor(TERM_X, y, &sb[i], FG, BG);
+                let lines = draw_bytes_line_nocursor(TERM_X, y, &owned[i], FG, BG);
                 y += (lines as i32) * CH_H;
             }
+            ptr::replace(p, Some(owned));
             TERM_Y = y;
         } else {
             TERM_Y = TERM_Y0;
@@ -555,10 +605,12 @@ pub fn shell_mouse_wheel(delta: i8) {
         if TERM_Y > maxy { TERM_Y = maxy; }
 
         // If we are using scrollback, adjust scroll position and redraw.
-        if SCROLLBACK.is_some() {
-            let sb = SCROLLBACK.as_ref().unwrap();
+        let p: *mut Option<Vec<Vec<u8>>> = ptr::addr_of_mut!(SCROLLBACK);
+        let had = ptr::read_volatile(p as *const Option<Vec<Vec<u8>>>);
+        if had.is_some() {
+            let owned = ptr::replace(p, None).unwrap();
             let visible_lines = (TERM_H / CH_H).max(1) as usize;
-            let max_start = if sb.len() > visible_lines { sb.len() - visible_lines } else { 0 };
+            let max_start = if owned.len() > visible_lines { owned.len() - visible_lines } else { 0 };
             if delta > 0 {
                 // scroll up -> decrease start index
                 let dec = delta as usize;
@@ -569,6 +621,7 @@ pub fn shell_mouse_wheel(delta: i8) {
                 SCROLLBACK_POS = (SCROLLBACK_POS + inc).min(max_start);
                 SCROLLBACK_USER_SCROLLED = true;
             }
+            ptr::replace(p, Some(owned));
             redraw_terminal_viewport_nocursor();
         } else {
             // Redraw status/footer since scrolling can change caret/visible lines
@@ -646,7 +699,7 @@ fn print_prompt_and_input() {
 
 fn buf_insert(ch: u8) {
     unsafe {
-        if INLEN >= INBUF.len().saturating_sub(1) { return; }
+        if INLEN >= INBUF_CAP.saturating_sub(1) { return; }
         if CARET > INLEN { CARET = INLEN; }
         for i in (CARET..INLEN).rev() {
             INBUF[i + 1] = INBUF[i];
@@ -1347,7 +1400,7 @@ pub fn run_shell() -> ! {
 AppState::Terminal => match ch {
                     b'\n' => {
                         // Print the entered command as a terminal line and execute.
-                        let req = unsafe {
+                        let req = {
                             let mut line = [0u8; 192];
                             let mut n = 0usize;
                             // include current dir in the echoed prompt: "<dir> $ "

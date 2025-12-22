@@ -185,7 +185,7 @@ pub fn resolve_a(host: &str) -> Result<[u8; 4], DnsError> {
     let mut spins: u32 = 0;
     while spins < 18_000_000 {
         spins = spins.wrapping_add(1);
-        unsafe { time::cpu_pause(); }
+        time::cpu_pause();
 
         let frame_opt = unsafe { super::NET.rtl.as_mut().unwrap().poll_recv() };
         let Some(frame) = frame_opt else { continue; };

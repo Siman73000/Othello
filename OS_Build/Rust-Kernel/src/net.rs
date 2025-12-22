@@ -17,6 +17,7 @@ use core::str;
 
 use crate::portio::{inb, inl, inw, outb, outl, outw};
 use crate::time;
+use core::ptr;
 
 pub mod dns;
 pub mod tcp;
@@ -137,6 +138,7 @@ static mut RX_BUFFER: AlignedRx = AlignedRx([0u8; RX_BUFFER_SIZE]);
 static mut TX_BUFFERS: [[u8; TX_BUF_SIZE]; NUM_TX] = [[0u8; TX_BUF_SIZE]; NUM_TX];
 
 static mut RX_SCRATCH: [u8; 2048] = [0u8; 2048];
+const RX_SCRATCH_LEN: usize = 2048;
 
 struct Rtl8139 {
     io: u16,
@@ -162,7 +164,9 @@ impl Rtl8139 {
             }
 
             // program RX buffer physical address (DMA needs physical addresses)
-            let rx_virt = &RX_BUFFER as *const _ as u64;
+            // Use a raw const pointer to the static to avoid creating a shared
+            // reference to a `static mut` (Rust 2024 compatibility).
+            let rx_virt = &raw const RX_BUFFER as *const _ as u64;
             let rx_phys = crate::bootinfo::virt_to_phys_u32(rx_virt).unwrap_or(0);
             outl(io + RBSTART, rx_phys);
 
@@ -174,7 +178,7 @@ impl Rtl8139 {
             outl(io + RCR, rcr);
 
             // TX config: MXDMA unlimited
-            outl(io + TCR, (0x7u32 << 8));
+            outl(io + TCR, 0x7u32 << 8);
 
             // Enable RX OK in IMR (we poll, but some QEMU models behave better with it enabled)
             outw(io + IMR, 0x0001);
@@ -242,12 +246,20 @@ self.tx_cur = (idx + 1) % NUM_TX;
         }
 
         unsafe {
-            let ring = &RX_BUFFER.0;
+            // Obtain a raw pointer to the RX buffer contents without creating a
+            // shared reference to the `static mut`.
+            let ring_ptr = &raw const RX_BUFFER.0 as *const u8;
 
             // Header is 4 bytes at rx_off (status + length), potentially in the overflow region.
             let off = self.rx_off;
-            let status = u16::from_le_bytes([ring[off], ring[off + 1]]);
-            let len_raw = u16::from_le_bytes([ring[off + 2], ring[off + 3]]) as usize;
+            let status = u16::from_le_bytes([
+                ptr::read_volatile(ring_ptr.add(off)),
+                ptr::read_volatile(ring_ptr.add(off + 1)),
+            ]);
+            let len_raw = u16::from_le_bytes([
+                ptr::read_volatile(ring_ptr.add(off + 2)),
+                ptr::read_volatile(ring_ptr.add(off + 3)),
+            ]) as usize;
 
             // Length is the whole frame bytes (usually includes CRC). Keep it conservative.
             if len_raw < 14 || len_raw > 2048 {
@@ -266,15 +278,21 @@ self.tx_cur = (idx + 1) % NUM_TX;
             // 2) Trim the returned slice using L2 ethertype + IPv4 total length when possible.
             let start = off + 4;
 
-            let copy_len = len_raw.min(RX_SCRATCH.len());
-            if start + copy_len <= ring.len() {
-                RX_SCRATCH[..copy_len].copy_from_slice(&ring[start..start + copy_len]);
+            let copy_len = len_raw.min(RX_SCRATCH_LEN);
+            if start + copy_len <= RX_BUFFER_SIZE {
+                // Fast path: contiguous region available in the backing buffer.
+                // Copy using volatile reads to avoid creating shared refs.
+                let mut j = 0usize;
+                while j < copy_len {
+                    RX_SCRATCH[j] = ptr::read_volatile(ring_ptr.add(start + j));
+                    j += 1;
+                }
             } else {
                 // Extremely rare fallback (shouldn't happen with our overflow size)
                 let mut j = 0usize;
                 while j < copy_len {
                     let src = (start + j) & (RX_RING_LEN - 1);
-                    RX_SCRATCH[j] = ring[src];
+                    RX_SCRATCH[j] = ptr::read_volatile(ring_ptr.add(src));
                     j += 1;
                 }
             }
@@ -365,6 +383,37 @@ static mut NET: NetState = NetState {
 // net_scan pretty strings (no alloc)
 static mut SCAN_BUFS: [[u8; 96]; 4] = [[0; 96]; 4];
 static mut SCAN_STRS: [&'static str; 4] = ["", "", "", ""];
+const SCAN_SLOTS: usize = 4;
+
+// Helpers to safely inspect / temporarily mutate the `NET.rtl` Option without
+// creating `&`/`&mut` borrows to a `static mut` (Rust 2024 compatibility).
+fn net_rtl_exists() -> bool {
+    unsafe {
+        let p: *mut Option<Rtl8139> = ptr::addr_of_mut!(NET.rtl);
+        let owned = ptr::replace(p, None);
+        let exists = owned.is_some();
+        ptr::replace(p, owned);
+        exists
+    }
+}
+
+fn with_rtl_owned<F, R>(f: F) -> Option<R>
+where
+    F: FnOnce(&mut Rtl8139) -> R,
+{
+    unsafe {
+        let p: *mut Option<Rtl8139> = ptr::addr_of_mut!(NET.rtl);
+        let owned = ptr::replace(p, None);
+        if let Some(mut rtl) = owned {
+            let r = f(&mut rtl);
+            ptr::replace(p, Some(rtl));
+            Some(r)
+        } else {
+            ptr::replace(p, None);
+            None
+        }
+    }
+}
 
 // -----------------------------------------------------------------------------
 // Public API
@@ -372,7 +421,7 @@ static mut SCAN_STRS: [&'static str; 4] = ["", "", "", ""];
 
 pub fn init() {
     unsafe {
-        if NET.rtl.is_some() {
+        if net_rtl_exists() {
             return;
         }
 
@@ -420,7 +469,7 @@ pub fn net_scan() -> NetScanResult {
     unsafe {
         let mut n = 0usize;
 
-        if NET.rtl.is_none() {
+        if !net_rtl_exists() {
             n += write_line_from_buf(n, b"rtl8139: not found");
             return NetScanResult { devices: &SCAN_STRS[..n] };
         }
@@ -468,52 +517,60 @@ pub fn net_scan() -> NetScanResult {
 pub fn dhcp_acquire() -> Result<(), DhcpError> {
     init();
 
-    unsafe {
-        let rtl = match NET.rtl.as_mut() {
-            Some(r) => r,
-            None => return Err(DhcpError::NoNic),
-        };
-
-        // clear prior
-        NET.cfg.dhcp_bound = false;
-        NET.cfg.ip = [0, 0, 0, 0];
-        NET.cfg.mask = [0, 0, 0, 0];
-        NET.cfg.gateway = [0, 0, 0, 0];
-        NET.cfg.dns = [0, 0, 0, 0];
-        NET.cfg.server_id = [0, 0, 0, 0];
-        NET.cfg.lease_seconds = 0;
+    // Take temporary ownership of NET.rtl so we can call RTL methods without
+    // creating `&mut` borrows to a `static mut`.
+    if let Some(res) = with_rtl_owned(|rtl| {
+        unsafe {
+            // clear prior
+            NET.cfg.dhcp_bound = false;
+            NET.cfg.ip = [0, 0, 0, 0];
+            NET.cfg.mask = [0, 0, 0, 0];
+            NET.cfg.gateway = [0, 0, 0, 0];
+            NET.cfg.dns = [0, 0, 0, 0];
+            NET.cfg.server_id = [0, 0, 0, 0];
+            NET.cfg.lease_seconds = 0;
+        }
 
         let xid = (time::rdtsc() as u32) ^ 0xA5A5_1234;
 
-        // DISCOVER
-        send_dhcp(rtl, xid, 1, [0, 0, 0, 0], [0, 0, 0, 0])?;
+        // Run DHCP sequence using the owned rtl reference.
+        (|| -> Result<(), DhcpError> {
+            // DISCOVER
+            send_dhcp(rtl, xid, 1, [0, 0, 0, 0], [0, 0, 0, 0])?;
 
-        // OFFER
-        let offer = wait_dhcp(rtl, xid, 2)?;
-        let offered_ip = offer.yiaddr;
-        let server = offer.server_id;
+            // OFFER
+            let offer = wait_dhcp(rtl, xid, 2)?;
+            let offered_ip = offer.yiaddr;
+            let server = offer.server_id;
 
-        // REQUEST
-        send_dhcp(rtl, xid, 3, offered_ip, server)?;
+            // REQUEST
+            send_dhcp(rtl, xid, 3, offered_ip, server)?;
 
-        // ACK (or NACK)
-        let ack = wait_dhcp(rtl, xid, 5)?;
-        if ack.msg_type == 6 {
-            return Err(DhcpError::Nack);
-        }
+            // ACK (or NACK)
+            let ack = wait_dhcp(rtl, xid, 5)?;
+            if ack.msg_type == 6 {
+                return Err(DhcpError::Nack);
+            }
 
-        NET.cfg.dhcp_bound = true;
-        NET.cfg.ip = offered_ip;
-        NET.cfg.mask = ack.subnet_mask;
-        NET.cfg.gateway = ack.router;
-        NET.cfg.dns = ack.dns1;
-        NET.cfg.server_id = server;
-        NET.cfg.lease_seconds = ack.lease_time;
+            unsafe {
+                NET.cfg.dhcp_bound = true;
+                NET.cfg.ip = offered_ip;
+                NET.cfg.mask = ack.subnet_mask;
+                NET.cfg.gateway = ack.router;
+                NET.cfg.dns = ack.dns1;
+                NET.cfg.server_id = server;
+                NET.cfg.lease_seconds = ack.lease_time;
 
-        // clear ARP cache
-        NET.arp_valid = false;
+                // clear ARP cache
+                NET.arp_valid = false;
+            }
 
-        Ok(())
+            Ok(())
+        })()
+    }) {
+        res
+    } else {
+        Err(DhcpError::NoNic)
     }
 }
 
@@ -724,7 +781,8 @@ pub fn ping_once(dst_ip: [u8; 4], seq: u16) -> Result<PingReply, PingError> {
     init();
 
     let (src_ip, mask, gateway, mac) = unsafe {
-        if NET.rtl.is_none() { return Err(PingError::NoNic); }
+        // Check NIC presence without creating a borrow to the `static mut`.
+        if !net_rtl_exists() { return Err(PingError::NoNic); }
         if NET.cfg.ip == [0, 0, 0, 0] { return Err(PingError::NotConfigured); }
         (NET.cfg.ip, NET.cfg.mask, NET.cfg.gateway, NET.cfg.mac)
     };
@@ -768,7 +826,10 @@ pub fn ping_once(dst_ip: [u8; 4], seq: u16) -> Result<PingReply, PingError> {
     ip[20..20 + icmp.len()].copy_from_slice(&icmp);
 
     // Send Ethernet frame
-    let ok = unsafe { NET.rtl.as_mut().unwrap().send_frame(nh_mac, 0x0800, &ip[..ip_len]) };
+    let ok = match with_rtl_owned(|rtl| rtl.send_frame(nh_mac, 0x0800, &ip[..ip_len])) {
+        Some(v) => v,
+        None => return Err(PingError::NoNic),
+    };
     if !ok { return Err(PingError::TxFail); }
 
     let start = time::rdtsc();
@@ -776,8 +837,11 @@ pub fn ping_once(dst_ip: [u8; 4], seq: u16) -> Result<PingReply, PingError> {
     // Wait for echo reply
     let mut spins: u32 = 0;
     while spins < 12_000_000 {
-        let frame = unsafe { NET.rtl.as_mut().unwrap().poll_recv() };
-        if let Some(f) = frame {
+        let frame_option = match with_rtl_owned(|rtl| rtl.poll_recv()) {
+            Some(f) => f,
+            None => return Err(PingError::NoNic),
+        };
+        if let Some(f) = frame_option {
             if let Some((ttl, got_seq)) = parse_icmp_echo_reply(f, src_ip, dst_ip, ident) {
                 if got_seq == seq {
                     let end = time::rdtsc();
@@ -827,13 +891,20 @@ fn arp_resolve(target_ip: [u8; 4], our_mac: [u8; 6], our_ip: [u8; 4]) -> Result<
     arp[18..24].copy_from_slice(&[0u8; 6]);              // target mac
     arp[24..28].copy_from_slice(&target_ip);
 
-    let ok = unsafe { NET.rtl.as_mut().unwrap().send_frame([0xFF; 6], 0x0806, &arp) };
+    let ok = match with_rtl_owned(|rtl| rtl.send_frame([0xFF; 6], 0x0806, &arp)) {
+        Some(v) => v,
+        None => return Err(PingError::NoNic),
+    };
     if !ok { return Err(PingError::TxFail); }
 
     // Wait for ARP reply
     let mut spins: u32 = 0;
     while spins < 6_000_000 {
-        if let Some(f) = unsafe { NET.rtl.as_mut().unwrap().poll_recv() } {
+        let frame_option = match with_rtl_owned(|rtl| rtl.poll_recv()) {
+            Some(f) => f,
+            None => return Err(PingError::NoNic),
+        };
+        if let Some(f) = frame_option {
             if let Some((sip, sha)) = parse_arp_reply_for_us(f, our_ip) {
                 if sip == target_ip {
                     unsafe {
@@ -981,7 +1052,7 @@ fn checksum16(data: &[u8]) -> u16 {
 }
 
 unsafe fn write_line_from_buf(slot: usize, s: &[u8]) -> usize {
-    if slot >= SCAN_BUFS.len() { return 0; }
+    if slot >= SCAN_SLOTS { return 0; }
     let len = s.len().min(SCAN_BUFS[slot].len());
     SCAN_BUFS[slot][..len].copy_from_slice(&s[..len]);
     let st = str::from_utf8_unchecked(&SCAN_BUFS[slot][..len]);

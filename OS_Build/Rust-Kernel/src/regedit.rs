@@ -135,7 +135,7 @@ pub fn render() {
 
     let x0 = gui::shell_content_left();
     let y0 = gui::shell_content_top();
-    let w  = gui::shell_content_w();
+    //let w  = gui::shell_content_w();
 
     let x = x0 + 12;
     let mut y = y0 + 10;

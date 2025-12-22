@@ -42,7 +42,12 @@ fn clamp_u32_to_byte(v: u32) -> u8 {
 }
 
 pub fn is_ready() -> bool {
-    unsafe { FB.is_some() }
+    unsafe {
+        // Use a volatile read with a raw pointer to avoid creating a shared
+        // reference to the `static mut` (Rust 2024 compatibility warning).
+        let v: Option<Framebuffer> = ptr::read_volatile(&raw const FB as *const _);
+        v.is_some()
+    }
 }
 
 /// Initialize framebuffer from Stage2 boot info.
@@ -151,13 +156,28 @@ fn serial_write_hex(v: u64) {
 }
 
 #[inline]
-pub fn width() -> usize  { unsafe { FB.map(|f| f.width).unwrap_or(0) } }
+pub fn width() -> usize  {
+    unsafe {
+        let v: Option<Framebuffer> = ptr::read_volatile(&raw const FB as *const _);
+        v.map(|f| f.width).unwrap_or(0)
+    }
+}
 #[inline]
-pub fn height() -> usize { unsafe { FB.map(|f| f.height).unwrap_or(0) } }
+pub fn height() -> usize {
+    unsafe {
+        let v: Option<Framebuffer> = ptr::read_volatile(&raw const FB as *const _);
+        v.map(|f| f.height).unwrap_or(0)
+    }
+}
 
 #[inline]
 fn fb() -> Framebuffer {
-    unsafe { FB.expect("FB not initialized") }
+    unsafe {
+        // Read FB via volatile copy from a raw pointer to avoid creating a
+        // shared reference to the `static mut`.
+        let v: Option<Framebuffer> = ptr::read_volatile(&raw const FB as *const _);
+        v.expect("FB not initialized")
+    }
 }
 
 #[inline]

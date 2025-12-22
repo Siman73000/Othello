@@ -243,9 +243,9 @@ pub fn handle_ascii(ch: u8) -> (bool, LoginOutcome) {
         0x08 => {
             // backspace
             let (_buf, len, _masked) = active_buf_mut();
-            unsafe {
-                if *len > 0 { *len -= 1; }
-            }
+
+            if *len > 0 { *len -= 1; }
+
             return (true, LoginOutcome::None);
         }
         b'\n' => {
@@ -261,15 +261,12 @@ pub fn handle_ascii(ch: u8) -> (bool, LoginOutcome) {
     // input chars
     if ch >= 0x20 && ch <= 0x7E {
         let (buf, len, _masked) = active_buf_mut();
-        unsafe {
-            if *len < buf.len() {
-                buf[*len] = ch;
-                *len += 1;
-                return (true, LoginOutcome::None);
-            }
+        if *len < buf.len() {
+            buf[*len] = ch;
+            *len += 1;
+            return (true, LoginOutcome::None);
         }
     }
-
     (false, LoginOutcome::None)
 }
 
@@ -280,7 +277,7 @@ fn try_submit() -> bool {
         let plen = core::cmp::min(PASS_LEN, PASS.len());
         let password = core::str::from_utf8_unchecked(&PASS[..plen]);
         let clen = core::cmp::min(CONF_LEN, CONF.len());
-        let confirm  = core::str::from_utf8_unchecked(&CONF[..clen]);
+        //let confirm  = core::str::from_utf8_unchecked(&CONF[..clen]);
 
         match MODE {
             Mode::Login => {
@@ -381,8 +378,8 @@ pub fn render_fullscreen() {
     if logo_y < 12 { logo_y = 12; }
     let rgba: &'static [u8] = include_bytes!("../wallpapers/Othello.rgba");
     if logo_w > 0 {
-        let dst_w_u = logo_w as usize;
-        let dst_h_u = logo_h as usize;
+        let dst_w_u = dst_w as usize;
+        let dst_h_u = dst_h as usize;
         for yy in 0..dst_h_u {
             for xx in 0..dst_w_u {
                 let sx = (xx.saturating_mul(OTHELLO_SRC_W) / dst_w_u).min(OTHELLO_SRC_W - 1);
@@ -455,7 +452,7 @@ pub fn render_fullscreen() {
     // Fields
     let mut y = py + 64 + CH_H + 14;
     let fx = px + 24;
-    let fv = px + 24 + CH_W * 12;
+    //let fv = px + 24 + CH_W * 12;
     let field_w = panel_w - 48;
 
     unsafe {
@@ -482,7 +479,8 @@ pub fn render_fullscreen() {
             y += CH_H + 4;
             draw_field_value(fx, y, &CONF, CONF_LEN, true, FG, BG);
             crate::framebuffer_driver::fill_rect(fx as usize, (y + CH_H + 2) as usize, field_w as usize, 1, if FIELD == Field::Confirm { ACC } else { 0x334155 });
-            y += CH_H + 14;
+            // no further use of `y` after drawing the last field; avoid
+            // assigning again to silence "value assigned to `y` is never read" warnings.
         }
     }
 
