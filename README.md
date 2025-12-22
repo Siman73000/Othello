@@ -19,7 +19,7 @@
   <img alt="arch" src="https://img.shields.io/badge/arch-x86__64-informational?style=for-the-badge">
   <img alt="langs" src="https://img.shields.io/badge/languages-Assembly%20%7C%20Rust%20%7C%20C-orange?style=for-the-badge">
   <img alt="status" src="https://img.shields.io/badge/status-research%20/%20edu-blueviolet?style=for-the-badge">
-  <img alt="version" src="https://img.shields.io/badge/version-1.0-success?style=for-the-badge">
+  <img alt="version" src="https://img.shields.io/badge/version-1.2.1-success?style=for-the-badge">
 </p>
 
 <p align="center">
