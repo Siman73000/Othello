@@ -1,7 +1,7 @@
 # [PROJECT_NAME] Code of Conduct
 
 > **Version:** 1.0  
-> **Last Updated:** [YYYY-MM-DD]  
+> **Last Updated:** [2025-12-21]  
 > **Applies To:** All community spaces and official project activities (see “Scope”).
 
 ---
