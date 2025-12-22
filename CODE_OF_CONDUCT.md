@@ -1,4 +1,4 @@
-# [Othello OS] Code of Conduct
+# Othello OS Code of Conduct
 
 > **Version:** 1.0  
 > **Last Updated:** [2025-12-21]  
