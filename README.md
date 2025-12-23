@@ -17,8 +17,8 @@
 
 <p align="center">
   <img alt="arch" src="https://img.shields.io/badge/arch-x86__64-informational?style=for-the-badge">
-  <img alt="langs" src="https://img.shields.io/badge/languages-Assembly%20%7C%20Rust%20%7C%20C-orange?style=for-the-badge">
-  <img alt="status" src="https://img.shields.io/badge/status-research%20/%20edu-blueviolet?style=for-the-badge">
+  <img alt="langs" src="https://img.shields.io/badge/languages-Assembly%20%7C%20Rust-orange?style=for-the-badge">
+  <img alt="status" src="https://img.shields.io/badge/purpose-research%20/%20edu-blueviolet?style=for-the-badge">
   <img alt="version" src="https://img.shields.io/badge/version-1.2.1-success?style=for-the-badge">
 </p>
 
@@ -69,9 +69,9 @@ UEFI: EFI Loader           → (already 64-bit)          → Rust _start(boot_in
 
 <blockquote>
   <p>
-    <strong>Othello</strong> is a minimal, hand-crafted operating system written in <strong>x86_64 Assembly</strong>, <strong>Rust</strong>, and <strong>C</strong>.<br />
-    It demonstrates the complete CPU boot process—from firmware through <strong>protected mode</strong> and into <strong>long mode</strong>—
-    while providing a real framebuffer desktop, an interactive shell, storage, and networking.
+    <strong>Othello</strong> is a hand-crafted operating system written in <strong>x86_64 Assembly</strong>, and <strong>Rust</strong>.<br />
+    It demonstrates the complete CPU boot process from firmware through <strong>protected mode</strong> and into <strong>long mode</strong>-
+    while providing a real framebuffer desktop, an interactive shell, persistent storage, and modern computer networking.
   </p>
 </blockquote>
 
@@ -401,7 +401,7 @@ UEFI path: EFI loader (64-bit)   → (load kernel + framebuffer info)       → 
 <p>
   Othello is developed with a security-first mindset and is intended to be <strong>compliant with NIST and NSA standards</strong>
   as a baseline for hardening and secure engineering practices.
-  <em>(This is a research/education OS — compliance here is self-attested unless a release explicitly documents a formal audit.)</em>
+  <em>(This is a research/education OS - compliance here is self-attested unless a release explicitly documents a formal audit.)</em>
 </p>
 
 <h3>Security goals</h3>
@@ -603,7 +603,7 @@ cd OS_Build
 <p>Typical build scripts will:</p>
 <ol>
   <li>Assemble the bootloader (MBR + stage-2 or UEFI loader).</li>
-  <li>Compile the Rust/C kernel.</li>
+  <li>Compile the Rust kernel.</li>
   <li>Link everything into a flat binary.</li>
   <li>Produce a bootable disk image or El Torito ISO.</li>
   <li>Launch QEMU with that image.</li>
@@ -693,11 +693,11 @@ cd OS_Build
 <h2 id="faq">FAQ</h2>
 
 <h3>Is Othello meant to be a daily-driver OS?</h3>
-<p>No. It’s a <strong>research and learning</strong> OS. It aims to be small, understandable, and hackable, not full-featured.</p>
+<p>No. It’s a <strong>research and learning</strong> OS. It aims to be a full-feature operating system with minimal obfuscation to encourage its use as an educational tool.</p>
 
 <h3>Can I use Othello as a base for my own kernel?</h3>
 <p>
-  Possibly! Check the <a href="#license">license</a> section and the <code>LICENSE</code> file, and consider opening an issue if you plan to build something substantial on top of it.
+  Yes! Check the <a href="#license">license</a> section and the <code>LICENSE</code> file to build something substantial on top of it. Othello OS is designed to be completely open source freeware for all to enjoy!
 </p>
 
 <h3>Does it support UEFI?</h3>
