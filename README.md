@@ -71,7 +71,7 @@ UEFI: EFI Loader           → (already 64-bit)          → Rust _start(boot_in
   <p>
     <strong>Othello</strong> is a hand-crafted operating system written in <strong>x86_64 Assembly</strong>, and <strong>Rust</strong>.<br />
     It demonstrates the complete CPU boot process from firmware through <strong>protected mode</strong> and into <strong>long mode</strong>-
-    while providing a real framebuffer desktop, an interactive shell, persistent storage, and modern computer networking.
+    while providing a real GUI desktop, an interactive shell, persistent storage, and modern computer networking.
   </p>
 </blockquote>
 
